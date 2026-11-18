@@ -1223,6 +1223,15 @@ struct SendArgs {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct TeamLogArgs {
+    /// Any conversation of the run: the one that asked for it, or one of its agents.
+    thread: String,
+    /// How many of the most recent events to take from each conversation.
+    #[serde(default)]
+    limit: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct ThreadArgs {
     /// Conversation id.
     thread: String,
@@ -4588,7 +4597,77 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             Ok(Outcome::with_data("the step's output", found.data))
         },
     )?;
-        reg.define::<ThreadArgs>("chat.stop", "Stop the agent")
+        reg.define::<TeamLogArgs>("chat.team_log", "One conversation's team, as a group chat")
+        .description("The messages of everyone working on a run, in one list, each tagged with the role that said it: the planner, the specialists and the person, interleaved by when they happened. Read it instead of opening each specialist's conversation to see what the team is doing. A conversation that is not part of a team run returns its own log.")
+        .tier(Tier::Read)
+        .effect(Effect::Read)
+        .agent_safe()
+        .dry_run()
+        .idempotent()
+        .handlers(
+            |_, a| simple("chat.team_log", format!("read the team of {}", a.thread)),
+            |ctx, a| {
+                ctx.store
+                    .get_thread(&a.thread)?
+                    .ok_or_else(|| DevdError::not_found("no such conversation"))?;
+                let per = a.limit.unwrap_or(200).clamp(1, 500);
+                let Some(run_id) = ctx.store.run_of_thread(&a.thread)? else {
+                    let events = ctx.store.list_events(&a.thread, 0, per)?;
+                    let events: Vec<Value> = events
+                        .iter()
+                        .map(|e| {
+                            let mut v = serde_json::to_value(e).unwrap_or(Value::Null);
+                            v["role"] = Value::Null;
+                            v["origin"] = json!(true);
+                            v
+                        })
+                        .collect();
+                    return Ok(Outcome::with_data(
+                        "This conversation is not part of a team run",
+                        json!({ "run": Value::Null, "origin": a.thread, "roles": {}, "events": events }),
+                    ));
+                };
+                let origin = ctx.store.run_thread(&run_id)?.unwrap_or_else(|| a.thread.clone());
+                let threads = ctx.store.threads_of_run(&run_id)?;
+                let mut roles = serde_json::Map::new();
+                let mut events: Vec<Value> = Vec::new();
+                for thread in &threads {
+                    let role = ctx.store.role_of_thread(thread)?;
+                    if let Some(role) = &role {
+                        roles.insert(thread.clone(), json!(role));
+                    }
+                    for e in ctx.store.list_events(thread, 0, per)? {
+                        let mut v = serde_json::to_value(&e).unwrap_or(Value::Null);
+                        v["role"] = json!(role);
+                        v["origin"] = json!(thread == &origin);
+                        events.push(v);
+                    }
+                }
+                // The order they happened in; two threads that wrote at the same instant keep
+                // their own order by sequence number.
+                events.sort_by(|left, right| {
+                    left["created_at"]
+                        .as_str()
+                        .cmp(&right["created_at"].as_str())
+                        .then_with(|| left["id"].as_i64().cmp(&right["id"].as_i64()))
+                });
+                Ok(Outcome::with_data(
+                    format!(
+                        "{} messages across {} conversations",
+                        events.len(),
+                        threads.len()
+                    ),
+                    json!({
+                        "run": run_id,
+                        "origin": origin,
+                        "roles": roles,
+                        "threads": threads,
+                        "events": events,
+                    }),
+                ))
+            },
+        )?;
+    reg.define::<ThreadArgs>("chat.stop", "Stop the agent")
     .description("Stops the agent after its current step and declines anything it was waiting to have approved.")
     .tier(Tier::Exec)
     .effect(Effect::Process)

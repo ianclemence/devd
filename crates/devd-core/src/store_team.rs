@@ -644,6 +644,53 @@ impl Store {
         })
     }
 
+    /// Every conversation a run has: the one that asked for it, then each task's own.
+    ///
+    /// The order is the order the work started, so a group chat reads the way the run did. The
+    /// origin is first because it is where the person is, and the specialists follow in task order.
+    pub fn threads_of_run(&self, run_id: &str) -> Result<Vec<String>> {
+        let mut threads = Vec::new();
+        if let Some(origin) = self.run_thread(run_id)? {
+            threads.push(origin);
+        }
+        for task in self.list_tasks_of_run(run_id)? {
+            if let Some(id) = task.thread_id {
+                if !threads.contains(&id) {
+                    threads.push(id);
+                }
+            }
+        }
+        Ok(threads)
+    }
+
+    /// The run a conversation belongs to: its origin, or the task whose agent it is.
+    pub fn run_of_thread(&self, thread_id: &str) -> Result<Option<String>> {
+        self.with(|c| {
+            let mut st =
+                c.prepare("SELECT id FROM team_runs WHERE thread_id=?1 LIMIT 1")?;
+            let mut rows = st.query(params![thread_id])?;
+            if let Some(row) = rows.next()? {
+                return Ok(Some(row.get::<_, String>(0)?));
+            }
+            let mut st =
+                c.prepare("SELECT run_id FROM team_tasks WHERE thread_id=?1 LIMIT 1")?;
+            let mut rows = st.query(params![thread_id])?;
+            match rows.next()? {
+                Some(row) => Ok(row.get::<_, Option<String>>(0)?),
+                None => Ok(None),
+            }
+        })
+    }
+
+    /// The role a conversation speaks for in its run, when it is a specialist's.
+    pub fn role_of_thread(&self, thread_id: &str) -> Result<Option<String>> {
+        self.with(|c| {
+            let mut st = c.prepare("SELECT role FROM team_tasks WHERE thread_id=?1 LIMIT 1")?;
+            let mut rows = st.query(params![thread_id])?;
+            Ok(rows.next()?.map(|row| row.get::<_, String>(0)).transpose()?)
+        })
+    }
+
     /// The conversation a run belongs to, if it belongs to one.
     pub fn run_thread(&self, run_id: &str) -> Result<Option<String>> {
         self.with(|c| {

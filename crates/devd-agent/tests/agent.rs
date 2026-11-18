@@ -2354,6 +2354,103 @@ fn a_template_fills_its_blanks_and_starts_the_team_with_its_definition_of_done()
 }
 
 #[test]
+fn a_team_run_reads_as_one_group_chat_with_a_bubble_for_each_role() {
+    let e = env();
+    // A run with two specialists, each with a conversation of its own.
+    let run = e
+        .human
+        .store
+        .create_run("Group chat", "Ship it", None, 2, "test")
+        .unwrap();
+    let origin = e
+        .human
+        .store
+        .create_thread("The request", None, None, None)
+        .unwrap();
+    e.human.store.set_run_thread(&run.id, &origin.id).unwrap();
+    let mut written = Vec::new();
+    for (key, role) in [("api", "implementer"), ("review", "reviewer")] {
+        let task = e
+            .human
+            .store
+            .add_task(
+                &run.id,
+                devd_core::store_team::NewTask {
+                    key,
+                    role,
+                    title: key,
+                    instructions: "do it",
+                    depends_on: &[],
+                    scope: &[],
+                    criteria: &[],
+                    mandate: None,
+                },
+            )
+            .unwrap();
+        let thread = e
+            .human
+            .store
+            .create_thread(key, None, None, None)
+            .unwrap();
+        e.human
+            .store
+            .update_team_task(
+                &task.id,
+                devd_core::store_team::TaskUpdate {
+                    state: &task.state,
+                    thread_id: Some(&thread.id),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        e.human
+            .store
+            .append_event(&thread.id, "assistant", &json!({ "text": format!("{role} speaking") }))
+            .unwrap();
+        written.push(thread.id);
+    }
+    e.human
+        .store
+        .append_event(&origin.id, "user", &json!({ "text": "please build it" }))
+        .unwrap();
+
+    let log = call(
+        &e,
+        &e.human,
+        "chat.team_log",
+        json!({ "thread": origin.id }),
+        Approval::None,
+    )
+    .unwrap();
+    assert_eq!(log["run"], json!(run.id));
+    let events = log["events"].as_array().unwrap();
+    assert_eq!(events.len(), 3, "the person and both agents: {log}");
+    let roles: Vec<&str> = events
+        .iter()
+        .map(|e| e["role"].as_str().unwrap_or(""))
+        .collect();
+    assert!(roles.contains(&"implementer"), "{roles:?}");
+    assert!(roles.contains(&"reviewer"), "{roles:?}");
+    assert!(
+        events
+            .iter()
+            .any(|e| e["origin"] == json!(true) && e["kind"] == "user"),
+        "the person's own message is in the same list: {log}"
+    );
+    // It is the same conversation whichever side asks: a specialist's log is the run's log.
+    let from_agent = call(
+        &e,
+        &e.human,
+        "chat.team_log",
+        json!({ "thread": written[0].clone() }),
+        Approval::None,
+    )
+    .unwrap();
+    assert_eq!(from_agent["run"], json!(run.id));
+    assert_eq!(from_agent["events"].as_array().unwrap().len(), 3);
+}
+
+#[test]
 fn a_conversation_can_be_put_aside_until_a_time_and_woken_by_hand() {
     let e = env();
     let t = e

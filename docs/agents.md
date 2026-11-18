@@ -782,6 +782,30 @@ never an unhealthy platform. A service is healthy only after it answers. The
 sidebar shows the state compactly, goes stale after 90 seconds, and the
 Diagnostics page lists every component with what it means and the fix.
 
+## A run as one conversation
+
+A team run is one piece of work, but its messages have lived in one conversation per specialist: to
+see what the team was doing you opened each one, and the conversation you started the run from only
+heard single-line notices. `chat.team_log` reads the whole run as one list instead: the person's
+messages, the planner's, and every specialist's, tagged with the role that said them and interleaved
+in the order they happened.
+
+```json
+{ "run": "…", "origin": "…", "roles": { "<thread>": "implementer" },
+  "threads": ["…"], "events": [{ "thread_id": "…", "role": "implementer",
+                                 "origin": false, "kind": "assistant", "data": { … } }] }
+```
+
+It is a read, not a copy: the per-specialist logs stay where they are, and nothing is duplicated into
+the conversation that started the run, so the assistant's own context never has to be told to ignore
+its team's chatter. Asking from any conversation of the run returns the same list, and a conversation
+that is not part of a run comes back as itself.
+
+The window is being rebuilt on it: one transcript for the whole run, each message a bubble with the
+face and name of the role that wrote it, the person's own messages among them, and the composer
+sending into the room rather than into one agent's ear. The per-specialist conversations remain
+reachable as the detail behind a bubble.
+
 ## Settling a conversation
 
 A finished conversation leaves the working list without being deleted: **Settle**
