@@ -52,7 +52,7 @@ foreach ($doc in Get-ChildItem (Join-Path $root "docs\*.md")) {
             # A php.ini directive, a code symbol, or a name a doc uses to say that
             # something does not exist is not a capability id.
             if ($id -match '^(opcache|date|display_errors|memory_limit|upload_max_filesize|post_max_size|max_execution_time|max_input_time)\.') { continue }
-            if ($id -match '^(run_ctx|run_tasks|ctx)\.') { continue }
+            if ($id -match '^(run_ctx|run_tasks|ctx|current)\.') { continue }   # symbols; `current` is devd.self's own object
             if ($line -match '(-like effects|does not exist|there is no capability)') { continue }
             if ($id -match '\.(name|id|url|port|env|steps|timeout_secs|interval_ms)$') { continue }
             if ($id -match '^(index|page|app)\.') { continue }

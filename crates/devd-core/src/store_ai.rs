@@ -202,6 +202,13 @@ pub struct ChatThread {
     /// turn "Thinking off" back on.
     #[serde(default)]
     pub effort: Option<String>,
+    /// The folder this conversation's tools run in, when it is not the project's own folder.
+    ///
+    /// A conversation can own a git worktree of the project, so two pieces of work on the same
+    /// checkout cannot tread on each other. `project` stays the project it belongs to — what the
+    /// sidebar groups under and what the run records — and this is where the files actually are.
+    #[serde(default)]
+    pub workdir: Option<String>,
 }
 
 fn default_kind() -> String {
@@ -394,7 +401,7 @@ fn row_provider(r: &rusqlite::Row) -> rusqlite::Result<Provider> {
 
 const PROVIDER_COLS: &str =
     "id,kind,label,base_url,key_env,default_model,is_default,enabled,created_at,updated_at";
-const THREAD_COLS: &str = "id,title,project,provider_id,model,state,error,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,cost_usd,resume_at,pr_url,settled_at,created_at,updated_at,kind,effort";
+const THREAD_COLS: &str = "id,title,project,provider_id,model,state,error,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,cost_usd,resume_at,pr_url,settled_at,created_at,updated_at,kind,effort,workdir";
 const REQ_COLS: &str = "id,actor,capability,args,plan,state,result,error,thread_id,tool_use_id,created_at,decided_at,decided_by,approval_id";
 
 fn row_thread(r: &rusqlite::Row) -> rusqlite::Result<ChatThread> {
@@ -418,6 +425,7 @@ fn row_thread(r: &rusqlite::Row) -> rusqlite::Result<ChatThread> {
         updated_at: r.get(16)?,
         kind: r.get(17)?,
         effort: r.get(18)?,
+        workdir: r.get(19)?,
     })
 }
 
@@ -626,11 +634,12 @@ impl Store {
             updated_at: now,
             kind: kind.to_string(),
             effort: None,
+            workdir: None,
         };
         self.with(|c| {
             c.execute(
-                &format!("INSERT INTO chat_threads ({THREAD_COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)"),
-                params![t.id, t.title, t.project, t.provider_id, t.model, t.state, t.error, t.input_tokens, t.output_tokens, t.cache_read_tokens, t.cache_write_tokens, t.cost_usd, t.resume_at, t.pr_url, t.settled_at, t.created_at, t.updated_at, t.kind, t.effort],
+                &format!("INSERT INTO chat_threads ({THREAD_COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)"),
+                params![t.id, t.title, t.project, t.provider_id, t.model, t.state, t.error, t.input_tokens, t.output_tokens, t.cache_read_tokens, t.cache_write_tokens, t.cost_usd, t.resume_at, t.pr_url, t.settled_at, t.created_at, t.updated_at, t.kind, t.effort, t.workdir],
             )?;
             Ok(())
         })?;
@@ -854,6 +863,17 @@ impl Store {
         let at = if settled { Some(util::now()) } else { None };
         self.with(|c| {
             c.execute("UPDATE chat_threads SET settled_at=?2, updated_at=?3 WHERE id=?1", params![id, at, util::now()])?;
+            Ok(())
+        })
+    }
+
+    /// Point a conversation's tools at a folder of its own, or back at the project. `None` clears it.
+    pub fn set_thread_workdir(&self, id: &str, workdir: Option<&str>) -> Result<()> {
+        self.with(|c| {
+            c.execute(
+                "UPDATE chat_threads SET workdir=?2, updated_at=?3 WHERE id=?1",
+                params![id, workdir, util::now()],
+            )?;
             Ok(())
         })
     }

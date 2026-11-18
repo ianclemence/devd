@@ -2354,6 +2354,91 @@ fn a_template_fills_its_blanks_and_starts_the_team_with_its_definition_of_done()
 }
 
 #[test]
+fn a_conversation_can_own_a_worktree_and_give_it_back() {
+    let e = env();
+    let project = e.root.join("www").join("proj");
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&project)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    // A worktree needs a commit to stand on.
+    git(&["init", "-q"]);
+    git(&["config", "user.email", "test@example.com"]);
+    git(&["config", "user.name", "Test"]);
+    std::fs::write(project.join("README.md"), "# proj\n").unwrap();
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "first"]);
+
+    let thread = e
+        .human
+        .store
+        .create_thread("Work in a worktree", Some(project.to_str().unwrap()), None, None)
+        .unwrap();
+    let made = call(
+        &e,
+        &e.human,
+        "chat.worktree",
+        json!({ "thread": thread.id, "action": "create" }),
+        Approval::None,
+    )
+    .unwrap();
+    let dir = made["workdir"].as_str().expect("the folder is reported").to_string();
+    assert!(
+        std::path::Path::new(&dir).join(".git").exists(),
+        "the worktree is its own checkout: {made}"
+    );
+    assert_eq!(
+        made["branch"].as_str(),
+        Some(format!("devd/{}", &thread.id[..8]).as_str()),
+        "the branch names the conversation"
+    );
+    assert_eq!(
+        e.human.store.get_thread(&thread.id).unwrap().unwrap().workdir.as_deref(),
+        Some(dir.as_str()),
+        "the conversation records where its tools run"
+    );
+    // A worktree is kept out of the project's own status, like the team's.
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&project)
+        .arg("status")
+        .arg("--porcelain")
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&status.stdout).trim().is_empty(),
+        "a worktree does not dirty the project: {}",
+        String::from_utf8_lossy(&status.stdout)
+    );
+
+    call(
+        &e,
+        &e.human,
+        "chat.worktree",
+        json!({ "thread": thread.id, "action": "detach" }),
+        Approval::None,
+    )
+    .unwrap();
+    assert!(
+        e.human.store.get_thread(&thread.id).unwrap().unwrap().workdir.is_none(),
+        "detaching puts the conversation back on the project"
+    );
+    assert!(
+        std::path::Path::new(&dir).exists(),
+        "detaching does not delete the work the conversation did"
+    );
+}
+
+#[test]
 fn a_conversation_with_a_recorded_cost_still_shows_what_its_cache_saved() {
     let e = env();
     call(&e, &e.human, "provider.save", json!({ "id": "deepseek", "preset": "deepseek", "api_key": "sk-test-0123456789abcdef", "default_model": "deepseek-flash" }), Approval::None).unwrap();

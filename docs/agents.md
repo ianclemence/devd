@@ -795,6 +795,33 @@ A conversation can carry the pull request it is about: `chat.link_pr` records it
 (and the header shows it as a quiet link), and `chat.settle` is the record behind
 the shelf, so an agent, a script and the window agree on what is settled.
 
+## A conversation's own worktree
+
+Two pieces of work on one checkout tread on each other: a stash, a branch switch, a half-finished
+edit. A conversation can own a **worktree** of its project instead — a real branch
+(`devd/<conversation>`) in a real folder (`<project>/.devd/worktrees/<conversation>-chat`), in the
+same repository — so its changes cannot collide with anything else, and the project's folder stays
+as it was until someone merges the branch.
+
+- `chat.worktree` does it: `create` makes the worktree (or finds the one this conversation already
+  has), `attach` points the conversation at a folder that already exists, and `detach` puts it back
+  on the project. Detaching never deletes the folder or the branch, so nothing a conversation did is
+  lost by going back.
+- It is a person's decision. The window offers it beside the conversation's other actions; an agent
+  cannot move its own workspace.
+- The conversation's tools run in that folder — file reads and writes, `project.*`, and the
+  `git.*` calls the agent makes — because the harness hands every call the conversation's working
+  folder, not the project path. `AGENTS.md`, `devd.yml` and the project's own commands are read from
+  there.
+- The project stays the project: the sidebar still groups the conversation under it, the run still
+  records it, and `devd.self` reports the worktree as `current.workdir` so an agent can say where it
+  is instead of guessing.
+- A repository with no commit has nothing to branch from, so `create` is refused with that reason
+  rather than committing on the person's behalf.
+
+The folder is kept out of the project's status through `.git/info/exclude`, the same way the team's
+worktrees are, so `git status` in the project stays clean while a conversation works.
+
 ## Deleting conversations, runs and messages
 
 Nothing is deleted on its own; a person decides, and every deletion asks for

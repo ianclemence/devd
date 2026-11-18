@@ -1346,8 +1346,16 @@ impl Hub {
             "{{SELF}}",
             &crate::selfmodel::prompt(&self.ctx, self.registry().ok().map(|r| r.as_ref())),
         );
+        // Where this conversation's files are, when it is not the project's own folder: said once,
+        // plainly, so the agent never has to infer it from a path in a tool result.
+        let in_worktree = match t.workdir.as_deref() {
+            Some(dir) => format!(
+                "\n\n## Where this work is\n\nThis conversation owns a worktree of the project at `{dir}`, on a branch of its own. Everything it changes is there, and the project's own folder stays as it was until someone merges the branch. Git operations that matter (status, diff, commit, push) belong to that folder."
+            ),
+            None => String::new(),
+        };
         format!(
-            "{prompt}\n{COMMON_CALLS}\n\n{}{drawing}\n\n## Skills\n{}\n## Context\nToday is {}.\n{}\n{}{}",
+            "{prompt}\n{COMMON_CALLS}\n\n{}{in_worktree}{drawing}\n\n## Skills\n{}\n## Context\nToday is {}.\n{}\n{}{}",
             crate::skills::CORE,
             crate::skills::index_for(&self.ctx.paths, None),
             &util::now()[..10],
@@ -1381,6 +1389,13 @@ impl Hub {
             .get_thread(tid)?
             .ok_or_else(|| DevdError::not_found("the conversation was deleted"))?;
         let thread_project = thread.project.clone();
+        // Where this conversation's tools actually run: its own worktree when it has one, and the
+        // project's folder otherwise. The project stays the project for the record and the sidebar.
+        let thread_workdir = thread
+            .workdir
+            .clone()
+            .filter(|w| std::path::Path::new(w).is_dir())
+            .or_else(|| thread_project.clone());
         let run = self.ensure_run_for(&thread)?;
         let run_id = run.id.clone();
         let (tools, external, direct, hooks, failures) = tool_specs(&self.ctx, &registry);
@@ -1463,11 +1478,11 @@ impl Hub {
             let mut mcp_ctx = self.ctx.clone();
             mcp_ctx.run = Some(run_ctx.clone());
             let mcp = McpServer::new(registry.clone(), mcp_ctx, "devd-agent")
-                .with_project(thread_project.clone())
+                .with_project(thread_workdir.clone())
                 .with_permission(permission.clone());
             let events = self.ctx.store.list_events(tid, 0, 100_000)?;
             let system = match &binding {
-                Some(b) => format!("{}\n\n{COMMON_CALLS}\n\n{}\n\n## Skills for your role\nLoad one with devd_invoke skills.get before you start the work it covers.\n{}{}", crate::team::system_prompt(&self.ctx, b), crate::skills::CORE, crate::skills::index_for(&self.ctx.paths, Some(&b.role)), context::instructions_text(thread_project.as_deref())),
+                Some(b) => format!("{}\n\n{COMMON_CALLS}\n\n{}\n\n## Skills for your role\nLoad one with devd_invoke skills.get before you start the work it covers.\n{}{}", crate::team::system_prompt(&self.ctx, b), crate::skills::CORE, crate::skills::index_for(&self.ctx.paths, Some(&b.role)), context::instructions_text(thread_workdir.as_deref())),
                 None => self.system_prompt(&thread),
             };
             let model_hint = candidates

@@ -1270,6 +1270,18 @@ struct SettleThread {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct ChatWorktree {
+    /// Conversation id.
+    thread: String,
+    /// `create` makes a worktree for this conversation, `attach` points it at one that exists,
+    /// `detach` puts it back on the project's own folder.
+    action: String,
+    /// The folder, for `attach`.
+    #[serde(default)]
+    path: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct ListRequests {
     /// Only requests still waiting for a decision (default true).
     #[serde(default)]
@@ -4605,6 +4617,76 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
                 let settled = a.settled.unwrap_or(true);
                 ctx.store.set_thread_settled(&a.thread, settled)?;
                 Ok(Outcome::ok(if settled { "settled" } else { "reopened" }))
+            },
+        )?;
+    reg.define::<ChatWorktree>("chat.worktree", "Give a conversation its own worktree, or put it back on the project")
+        .description("A conversation can work in its own git worktree of its project: a real branch and its own folder, in the same repository, so its changes cannot collide with another piece of work. `create` makes one (branch `devd/<conversation>`, folder `.devd/worktrees/<conversation>-chat`), `attach` points the conversation at a folder that already exists, and `detach` puts it back on the project without deleting anything. A person's decision: the window offers it, and an agent cannot move its own workspace.")
+        .tier(Tier::Write)
+        .effect(Effect::Write)
+        .dry_run()
+        .handlers(
+            |_, a| simple("chat.worktree", format!("{} a worktree for conversation {}", a.action, a.thread)),
+            |ctx, a| {
+                let t = ctx.store
+                    .get_thread(&a.thread)?
+                    .ok_or_else(|| DevdError::not_found("no such conversation"))?;
+                // Back to the project: the worktree and its branch stay on disk, so nothing is lost.
+                if a.action == "detach" {
+                    ctx.store.set_thread_workdir(&a.thread, None)?;
+                    ctx.events.emit_with(
+                        "chat.event",
+                        format!("conversation {} back on the project", a.thread),
+                        json!({ "thread": a.thread, "kind": "worktree" }),
+                    );
+                    return Ok(Outcome::with_data(
+                        "This conversation works in the project's own folder again",
+                        json!({ "thread": a.thread, "workdir": Value::Null, "branch": Value::Null }),
+                    ));
+                }
+                if !matches!(a.action.as_str(), "create" | "attach") {
+                    return Err(DevdError::invalid(format!(
+                        "`{}` is not one of create, attach or detach",
+                        a.action
+                    )));
+                }
+                let project = t.project.as_deref().ok_or_else(|| {
+                    DevdError::invalid(
+                        "this conversation has no project, so there is no repository to take a worktree of",
+                    )
+                })?;
+                let (dir, branch) = if a.action == "create" {
+                    let short = &t.id[..t.id.len().min(8)];
+                    let (dir, branch) =
+                        crate::worktree::create(std::path::Path::new(project), short)?;
+                    (dir.display().to_string(), Some(branch))
+                } else {
+                    let path = a
+                        .path
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|p| !p.is_empty())
+                        .ok_or_else(|| DevdError::invalid("attach needs the folder's path"))?;
+                    let dir = std::path::PathBuf::from(path);
+                    if !dir.is_dir() {
+                        return Err(DevdError::not_found(format!("{path} is not a folder")));
+                    }
+                    if !crate::worktree::is_worktree(&dir) {
+                        return Err(DevdError::invalid(format!(
+                            "{path} is not a git checkout, so a conversation cannot work in it"
+                        )));
+                    }
+                    (dir.display().to_string(), crate::worktree::branch_of(&dir))
+                };
+                ctx.store.set_thread_workdir(&a.thread, Some(&dir))?;
+                ctx.events.emit_with(
+                    "chat.event",
+                    format!("conversation {} in a worktree", a.thread),
+                    json!({ "thread": a.thread, "kind": "worktree", "workdir": dir }),
+                );
+                Ok(Outcome::with_data(
+                    format!("This conversation works in {dir}"),
+                    json!({ "thread": a.thread, "workdir": dir, "branch": branch }),
+                ))
             },
         )?;
     {

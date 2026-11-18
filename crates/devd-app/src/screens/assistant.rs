@@ -836,6 +836,58 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
         .and_then(|snap| snap.list("").iter().find(|t| t["id"].as_str() == Some(id)).cloned());
     let pinned = marks.as_ref().is_some_and(|m| m["pinned_at"].is_string());
     let settled_now = thread["settled_at"].is_string();
+    // Where this conversation's files are: its own worktree, or the project's folder.
+    let in_worktree = thread["workdir"]
+        .as_str()
+        .filter(|w| !w.is_empty())
+        .map(str::to_string);
+    if thread["project"].as_str().is_some() || in_worktree.is_some() {
+        let tid = id.to_string();
+        let tooltip = if in_worktree.is_some() {
+            "Working in its own worktree — click to go back to the project"
+        } else {
+            "Give this conversation its own worktree, so its changes cannot collide with other work"
+        };
+        let back = in_worktree.is_some();
+        actions = actions.child(
+            div()
+                .id("conversation.worktree.wrap")
+                .tooltip(ui::tip(tooltip))
+                .child(
+                    Button::icon_only("conversation.worktree", "branch")
+                        .kind(if in_worktree.is_some() {
+                            ButtonKind::Secondary
+                        } else {
+                            ButtonKind::Ghost
+                        })
+                        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                            if back {
+                                devd(cx).sync.mutate(
+                                    Mutation::new(
+                                        "chat.worktree",
+                                        json!({ "thread": tid, "action": "detach" }),
+                                    )
+                                    .invalidating("chat"),
+                                );
+                            } else {
+                                this.confirm(
+                                    "Give this conversation its own worktree?".to_string(),
+                                    "Its tools will work in a separate folder on its own branch, in the same repository, so this conversation's changes cannot collide with another piece of work. Nothing is deleted, and going back keeps the folder.".to_string(),
+                                    "Start a worktree",
+                                    false,
+                                    Mutation::new(
+                                        "chat.worktree",
+                                        json!({ "thread": tid, "action": "create" }),
+                                    )
+                                    .invalidating("chat"),
+                                    window,
+                                    cx,
+                                );
+                            }
+                        })),
+                ),
+        );
+    }
     let last_event = events.last().and_then(|e| e["id"].as_i64());
     let (to_pin, to_fork, fork_title) = (id.to_string(), id.to_string(), title.clone());
     actions = actions

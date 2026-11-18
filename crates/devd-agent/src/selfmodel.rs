@@ -180,6 +180,13 @@ pub fn facts(ctx: &Ctx) -> Value {
             "step": ctx.run.as_ref().and_then(|run| run.step_id.clone()),
             "project": current_run.as_ref().and_then(|run| run.project.clone()),
             "thread": current_run.as_ref().and_then(|run| run.thread_id.clone()),
+            // The folder this conversation's tools run in, when it is not the project's own: a
+            // worktree it owns, on its own branch. Null when it works in the project.
+            "workdir": current_run
+                .as_ref()
+                .and_then(|run| run.thread_id.as_deref())
+                .and_then(|tid| ctx.store.get_thread(tid).ok().flatten())
+                .and_then(|t| t.workdir),
             "dry_run": ctx.dry_run,
         },
         "limits": [
