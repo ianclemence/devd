@@ -1826,7 +1826,7 @@ fn draw(thread: &str, index: usize, item: &Item, resume: bool, cx: &App) -> AnyE
                 .flex()
                 .items_center()
                 .gap(px(6.0))
-                .child(ui::face(initials, Tone::Accent, false, cx))
+                .child(ui::face(initials, role_tone(from), false, cx))
                 .child(
                     div()
                         .text_size(px(size::TEXT_XS))
@@ -2121,6 +2121,25 @@ fn role_title(role: &str) -> String {
     }
 }
 
+/// A role's face colour, stable across a room: the same member keeps the same colour in every
+/// bubble and every run, so a long transcript is scanned by identity rather than read by name.
+///
+/// The palette is the four tones that mean nothing bad. Red and amber are reserved for failure and
+/// warning, and a person must never have to work out whether green means "passed" or "is the QA
+/// engineer".
+fn role_tone(role: &str) -> Tone {
+    let mut hash: u32 = 0;
+    for byte in role.bytes() {
+        hash = hash.wrapping_mul(31).wrapping_add(u32::from(byte));
+    }
+    match hash % 4 {
+        0 => Tone::Accent,
+        1 => Tone::Info,
+        2 => Tone::Ok,
+        _ => Tone::Neutral,
+    }
+}
+
 fn devd_writes(
     id: &str,
     blocks: &[Block],
@@ -2151,7 +2170,7 @@ fn devd_writes(
             .flex()
             .items_center()
             .gap(px(6.0))
-            .child(ui::face(initials, Tone::Accent, false, cx))
+            .child(ui::face(initials, role_tone(role), false, cx))
             .child(
                 div()
                     .text_size(px(size::TEXT_XS))
@@ -2304,6 +2323,24 @@ mod tests {
             "the prompt total is mostly cache reads and must not read as fresh work"
         );
         assert_eq!(token_facts(400, 0, 0), "400 fresh in · 0 cached · 0 out");
+    }
+
+    /// A member keeps their colour: the same role always reads the same, and the palette never
+    /// borrows the two tones that mean something is wrong.
+    #[test]
+    fn a_members_colour_is_theirs_and_never_a_warning() {
+        assert_eq!(role_tone("backend"), role_tone("backend"), "a member keeps their colour");
+        assert!(
+            role_tone("backend") != role_tone("reviewer"),
+            "two members are told apart without reading their names"
+        );
+        for role in ["backend", "reviewer", "qa", "implementer", "planner", "docs", "designer"] {
+            let tone = role_tone(role);
+            assert!(
+                !matches!(tone, Tone::Danger | Tone::Warn),
+                "{role} must not wear a colour that means a problem"
+            );
+        }
     }
 
     /// A room is one conversation: a teammate's turn is tagged with the role that said it, and a
