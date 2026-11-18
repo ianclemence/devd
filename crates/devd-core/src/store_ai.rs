@@ -1286,6 +1286,32 @@ impl Store {
         })
     }
 
+    /// The newest events of a conversation, oldest of those first.
+    ///
+    /// `list_events` counts forward, which is right for a client polling from where it was and wrong
+    /// for a reader that wants the end of a long log: a run's room opened on its first messages
+    /// instead of its latest ones would be a transcript of what happened days ago.
+    pub fn tail_events(&self, thread_id: &str, limit: i64) -> Result<Vec<ChatEvent>> {
+        self.with(|c| {
+            let mut st = c.prepare(
+                "SELECT id,thread_id,kind,data,created_at FROM (\
+                 SELECT id,thread_id,kind,data,created_at FROM chat_events WHERE thread_id=?1 \
+                 ORDER BY id DESC LIMIT ?2) ORDER BY id",
+            )?;
+            let rows = st.query_map(params![thread_id, limit], |r| {
+                let data: String = r.get(3)?;
+                Ok(ChatEvent {
+                    id: r.get(0)?,
+                    thread_id: r.get(1)?,
+                    kind: r.get(2)?,
+                    data: serde_json::from_str(&data).unwrap_or(serde_json::Value::Null),
+                    created_at: r.get(4)?,
+                })
+            })?;
+            Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+        })
+    }
+
     // ---------------------------------------------------------------- inbox
 
     /// Whether the conversation's last event is a tool call still waiting for

@@ -2489,7 +2489,30 @@ fn a_team_run_reads_as_one_group_chat_with_a_bubble_for_each_role() {
         "{:?}",
         waiting[0].text
     );
-    // A message addressed to a role the run does not have is refused, with the roles it does have.
+    // A room opens on the newest messages, not the oldest: a long run's transcript must not be stuck
+    // at its first day. Six messages, a limit of two, the last two come back in the order said.
+    for n in 0..6 {
+        e.human
+            .store
+            .append_event(&written[1], "assistant", &json!({ "content": [{ "type": "text", "text": format!("step {n}") }] }))
+            .unwrap();
+    }
+    let tail = call(
+        &e,
+        &e.human,
+        "chat.team_log",
+        json!({ "thread": written[0].clone(), "limit": 2 }),
+        Approval::None,
+    )
+    .unwrap();
+    let texts: Vec<String> = tail["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["thread_id"] == json!(written[1]))
+        .filter_map(|e| e["data"]["content"][0]["text"].as_str().map(str::to_string))
+        .collect();
+    assert_eq!(texts, vec!["step 4".to_string(), "step 5".to_string()], "{texts:?}");
     let refused = call(
         &e,
         &e.human,

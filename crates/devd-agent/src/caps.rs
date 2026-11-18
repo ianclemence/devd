@@ -4650,7 +4650,9 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
                     if let Some(role) = &role {
                         roles.insert(thread.clone(), json!(role));
                     }
-                    for e in ctx.store.list_events(thread, 0, per)? {
+                    // The newest of each conversation: a room opens on what is happening, not on
+                    // the first thing ever said in it.
+                    for e in ctx.store.tail_events(thread, per)? {
                         let mut v = serde_json::to_value(&e).unwrap_or(Value::Null);
                         v["role"] = json!(role);
                         v["origin"] = json!(thread == &origin);
