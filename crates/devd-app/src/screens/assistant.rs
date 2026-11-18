@@ -1166,16 +1166,51 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
     cx.global_mut::<crate::state::Devd>().link_root =
         thread["project"].as_str().map(std::path::PathBuf::from);
     let project = thread["project"].as_str().map(project_name);
-    let title = thread["title"]
-        .as_str()
-        .unwrap_or("Conversation")
-        .to_string();
+    // A room is the run, so it is titled with what the run is for rather than with the id it was
+    // given: a person reading the conversation should see the goal, not a database key.
+    let room_data = room
+        .as_deref()
+        .and_then(|run| devd(cx).sync.watch(&q::run(run)).data.clone());
+    let title = match room_data
+        .as_ref()
+        .and_then(|d| d["run"]["goal"].as_str())
+        .map(str::to_string)
+    {
+        Some(goal) => {
+            let short: String = goal.chars().take(90).collect();
+            if short.len() < goal.len() { format!("{short}…") } else { short }
+        }
+        None => thread["title"]
+            .as_str()
+            .unwrap_or("Conversation")
+            .to_string(),
+    };
 
     // The heading: the title, then one quiet line of facts, then the actions. Facts are words in the page's secondary colour
     // separated by a middle dot, not badges; an error is not squeezed in here but given its own line below.
     let mut facts: Vec<String> = Vec::new();
     if let Some(project) = project {
         facts.push(project);
+    }
+    // Who is in the room and where the work stands: the roster is what makes a run a team rather
+    // than a queue, and it belongs beside the goal it is working toward.
+    if let Some(data) = room_data.as_ref() {
+        let mut roles: Vec<String> = data["tasks"]
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+            .iter()
+            .filter_map(|t| t["role"].as_str())
+            .map(role_title)
+            .collect();
+        roles.sort();
+        roles.dedup();
+        if let Some(state) = data["run"]["state"].as_str() {
+            facts.push(state.to_string());
+        }
+        if !roles.is_empty() {
+            facts.push(roles.join(", "));
+        }
     }
     if input + out > 0 {
         facts.push(token_facts(input, cached, out));
