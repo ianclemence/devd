@@ -42,6 +42,8 @@ pub enum Item {
         blocks: Vec<Block>,
         model: String,
         role: Option<String>,
+        /// The conversation it was said in, when the item came from a room's merged log.
+        thread: Option<String>,
     },
     /// A message said in a team room, by an agent to the room or to one teammate.
     Said {
@@ -135,6 +137,9 @@ pub fn fold(events: &[Value], pending: &[&str], running: bool) -> Vec<Item> {
                                     blocks: markdown::parse(text),
                                     model: model.clone(),
                                     role: event["role"].as_str().map(str::to_string),
+                                    // The conversation it was said in, so a bubble in a room can
+                                    // open the specialist's own log when it is pressed.
+                                    thread: event["thread_id"].as_str().map(str::to_string),
                                 });
                             }
                         }
@@ -1534,7 +1539,7 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
         let content = match items.get(index) {
             Some(item) => draw(&key, index, item, resume_at == Some(index), cx),
             None => match &live {
-                Some(blocks) => devd_writes(&format!("{key}.live"), blocks, "", None, true, cx),
+                Some(blocks) => devd_writes(&format!("{key}.live"), blocks, "", None, None, true, cx),
                 None => div().into_any_element(),
             },
         };
@@ -1783,11 +1788,19 @@ fn draw(thread: &str, index: usize, item: &Item, resume: bool, cx: &App) -> AnyE
                     .child(md::linked(&format!("{thread}.{index}.you"), text, cx)),
             )
             .into_any_element(),
-        Item::Devd { blocks, model, role } => devd_writes(
+        Item::Devd {
+            blocks,
+            model,
+            role,
+            thread: said_in,
+        } => devd_writes(
             &format!("{thread}.{index}"),
             blocks,
             model,
             role.as_deref(),
+            // A teammate's bubble in a room is a door: pressing it opens the conversation that
+            // message came from, so the detail is one press away instead of a search in the list.
+            said_in.as_deref().filter(|said_in| *said_in != thread),
             false,
             cx,
         ),
@@ -2113,6 +2126,7 @@ fn devd_writes(
     blocks: &[Block],
     model: &str,
     role: Option<&str>,
+    open: Option<&str>,
     live: bool,
     cx: &App,
 ) -> AnyElement {
@@ -2132,20 +2146,34 @@ fn devd_writes(
             .filter_map(|w| w.chars().next())
             .take(2)
             .collect();
-        column = column.child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(6.0))
-                .child(ui::face(initials, Tone::Accent, false, cx))
-                .child(
-                    div()
-                        .text_size(px(size::TEXT_XS))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(t.muted)
-                        .child(name),
-                ),
-        );
+        let mut head = div()
+            .id(gpui::ElementId::Name(format!("{id}.head").into()))
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .child(ui::face(initials, Tone::Accent, false, cx))
+            .child(
+                div()
+                    .text_size(px(size::TEXT_XS))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(t.muted)
+                    .child(name),
+            );
+        // The name is the way in: it says whose words these are and where the rest of them live.
+        if let Some(open) = open {
+            let (target, hover) = (open.to_string(), t.hover);
+            head = head
+                .px(px(4.0))
+                .py(px(1.0))
+                .ml(px(-4.0))
+                .rounded(px(size::RADIUS))
+                .cursor_pointer()
+                .hover(move |s| s.bg(hover))
+                .on_click(move |_, _, cx| {
+                    cx.global_mut::<crate::state::Devd>().opened_thread = Some(target.clone());
+                });
+        }
+        column = column.child(head);
     }
     column = column.child(md::document(id, blocks, cx));
     if live {
