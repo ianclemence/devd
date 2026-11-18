@@ -1036,6 +1036,19 @@ pub fn run_of_self(id: &str, cx: &App) -> Option<String> {
         })
 }
 
+/// Whether a run can still take a direction: a finished one would refuse it, and the person would
+/// get an error for having spoken in a conversation they were reading.
+pub fn run_open(run: &str, cx: &App) -> bool {
+    devd(cx)
+        .sync
+        .watch(&q::runs())
+        .list("")
+        .iter()
+        .find(|r| r["id"].as_str() == Some(run))
+        .map(|r| !matches!(r["state"].as_str().unwrap_or_default(), "done" | "failed" | "cancelled"))
+        .unwrap_or(false)
+}
+
 fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElement {
     cx.global_mut::<crate::state::Devd>().open_thread = Some(id.to_string());
     let t = theme(cx).clone();

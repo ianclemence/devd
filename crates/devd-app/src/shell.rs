@@ -616,6 +616,7 @@ impl Shell {
         if let Some(run) = thread
             .as_ref()
             .and_then(|id| screens::assistant::run_of_self(id, cx))
+            .filter(|run| screens::assistant::run_open(run, cx))
         {
             devd(cx).sync.mutate(
                 Mutation::new("team.say", json!({ "run": run, "text": text }))
