@@ -446,10 +446,14 @@ fn sidebar(current: Option<&str>, cx: &mut Context<Shell>) -> impl IntoElement {
         .collect();
     // What the person pinned is at the top, under a heading of its own, in the order it was pinned.
     own.sort_by_key(|th| th["pinned_at"].as_str().map(|at| (0, at.to_string())).unwrap_or((1, String::new())));
+    // Working conversations first, in their project's group. Settled work keeps its own shelf below
+    // them: out of the way, still one click from being reopened, and never mixed into active work.
+    let (mut settled, working): (Vec<&Value>, Vec<&Value>) = own
+        .into_iter()
+        .partition(|th| th["settled_at"].is_string());
+    settled.sort_by(|a, b| b["settled_at"].as_str().cmp(&a["settled_at"].as_str()));
     let mut last_project: Option<String> = None;
-    for thread in own {
-        let id = thread["id"].as_str().unwrap_or_default().to_string();
-        // A conversation with no project is listed without a heading; a heading says which project the ones under it are about.
+    for thread in working {
         let project = if thread["pinned_at"].is_string() {
             Some("Pinned".to_string())
         } else {
@@ -467,75 +471,27 @@ fn sidebar(current: Option<&str>, cx: &mut Context<Shell>) -> impl IntoElement {
             }
             last_project = project;
         }
-        let state = thread["state"].as_str().unwrap_or_default();
-        let said = devd_app_core::status::of(state);
-        // A conversation at rest has no mark: the list is quiet until something needs a look.
-        let marker: AnyElement =
-            if said.label.is_empty() || said.level == devd_app_core::status::Level::Neutral {
-                div().size(px(7.0)).flex_none().into_any_element()
-            } else {
-                ui::state_mark(
-                    gpui::ElementId::Name(
-                        format!("thread.live.{}", thread["id"].as_str().unwrap_or_default()).into(),
-                    ),
-                    &said,
-                    cx,
-                )
-            };
-        let go = id.clone();
-        let (doomed, doomed_title, was_open) = (
-            id.clone(),
-            thread["title"]
-                .as_str()
-                .unwrap_or("this conversation")
-                .to_string(),
-            current == Some(id.as_str()),
-        );
+        column = column.child(thread_row(thread, current, false, cx));
+    }
+    if !settled.is_empty() {
+        let count = settled.len();
         column = column.child(
-            ui::row(
-                gpui::ElementId::Name(format!("thread.{id}").into()),
-                current == Some(id.as_str()),
-                cx,
-            )
-            .group("thread.row")
-            .h(px(34.0))
-            .child(marker)
-            .child(
-                div().flex_1().min_w_0().child(ui::Clip::new(
-                    thread["title"]
-                        .as_str()
-                        .unwrap_or("Conversation")
-                        .to_string(),
+            div()
+                .px(px(10.0))
+                .pt(px(14.0))
+                .pb(px(4.0))
+                .child(eyebrow(
+                    if count == 1 {
+                        "SETTLED".to_string()
+                    } else {
+                        format!("SETTLED · {count}")
+                    },
+                    cx,
                 )),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .text_size(px(size::TEXT_XS))
-                    .text_color(t.faint)
-                    .child(ui::ago(thread["updated_at"].as_str().unwrap_or_default())),
-            )
-            .child(ui::row_action(
-                gpui::ElementId::Name(format!("thread.delete.{id}").into()),
-                "thread.row",
-                "trash",
-                "Delete conversation",
-                true,
-                cx.listener(move |this, _: &ClickEvent, window, cx| {
-                    this.delete_conversation(
-                        doomed.clone(),
-                        doomed_title.clone(),
-                        was_open,
-                        window,
-                        cx,
-                    )
-                }),
-                cx,
-            ))
-            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                this.go(Route::Assistant(Some(go.clone())), cx)
-            })),
         );
+        for thread in settled {
+            column = column.child(thread_row(thread, current, true, cx));
+        }
     }
     let clear = div().flex_none().p(px(8.0)).border_t_1().border_color(t.line).child(
         Button::new("threads.clear", "Clear finished").icon("trash").kind(ButtonKind::Ghost).on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
@@ -584,6 +540,96 @@ fn sidebar(current: Option<&str>, cx: &mut Context<Shell>) -> impl IntoElement {
                 .child(column),
         )
         .child(clear)
+}
+
+/// One conversation in the list.
+///
+/// A settled one reads as parked: dimmer, never live, and with the same actions, because a settled
+/// conversation can still be opened, reopened or deleted.
+fn thread_row(
+    thread: &Value,
+    current: Option<&str>,
+    settled: bool,
+    cx: &mut Context<Shell>,
+) -> AnyElement {
+    let t = theme(cx).clone();
+    let id = thread["id"].as_str().unwrap_or_default().to_string();
+    let said = devd_app_core::status::of(thread["state"].as_str().unwrap_or_default());
+    let marker: AnyElement =
+        if settled || said.label.is_empty() || said.level == devd_app_core::status::Level::Neutral {
+            div().size(px(7.0)).flex_none().into_any_element()
+        } else {
+            ui::state_mark(
+                gpui::ElementId::Name(format!("thread.live.{id}").into()),
+                &said,
+                cx,
+            )
+        };
+    let go = id.clone();
+    let (doomed, doomed_title, was_open) = (
+        id.clone(),
+        thread["title"]
+            .as_str()
+            .unwrap_or("this conversation")
+            .to_string(),
+        current == Some(id.as_str()),
+    );
+    let title = thread["title"].as_str().unwrap_or("Conversation").to_string();
+    ui::row(
+        gpui::ElementId::Name(format!("thread.{id}").into()),
+        current == Some(id.as_str()),
+        cx,
+    )
+    .group("thread.row")
+    .h(px(34.0))
+    .child(marker)
+    .child(
+        div()
+            .flex_1()
+            .min_w_0()
+            .text_color(if settled { t.muted } else { t.text })
+            .child(ui::Clip::new(title)),
+    )
+    .child(
+        div()
+            .flex_none()
+            .text_size(px(size::TEXT_XS))
+            .text_color(t.faint)
+            .child(ui::ago(thread["updated_at"].as_str().unwrap_or_default())),
+    )
+    .child(ui::row_action(
+        gpui::ElementId::Name(format!("thread.delete.{id}").into()),
+        "thread.row",
+        "trash",
+        "Delete conversation",
+        true,
+        cx.listener(move |this, _: &ClickEvent, window, cx| {
+            this.delete_conversation(
+                doomed.clone(),
+                doomed_title.clone(),
+                was_open,
+                window,
+                cx,
+            )
+        }),
+        cx,
+    ))
+    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+        this.go(Route::Assistant(Some(go.clone())), cx)
+    }))
+    .into_any_element()
+}
+
+/// What a linked pull request is called in a conversation's header: `PR 42`, `MR 7`, or the words
+/// alone when the address does not end in a number.
+fn pr_label(url: &str) -> String {
+    let tail = url.trim_end_matches('/').rsplit('/').next().unwrap_or_default();
+    let kind = if url.contains("merge_requests") { "MR" } else { "PR" };
+    if !tail.is_empty() && tail.chars().all(|c| c.is_ascii_digit()) {
+        format!("{kind} {tail}")
+    } else {
+        "Pull request".to_string()
+    }
 }
 
 impl Shell {
@@ -789,6 +835,7 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
         .peek(&q::threads())
         .and_then(|snap| snap.list("").iter().find(|t| t["id"].as_str() == Some(id)).cloned());
     let pinned = marks.as_ref().is_some_and(|m| m["pinned_at"].is_string());
+    let settled_now = thread["settled_at"].is_string();
     let last_event = events.last().and_then(|e| e["id"].as_i64());
     let (to_pin, to_fork, fork_title) = (id.to_string(), id.to_string(), title.clone());
     actions = actions
@@ -806,6 +853,32 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
                         }),
                 ),
         )
+        .child({
+            let to_settle = id.to_string();
+            div()
+                .id("conversation.settle.wrap")
+                .tooltip(ui::tip(if settled_now {
+                    "Reopen: back into the working list"
+                } else {
+                    "Settle: finished work, out of the working list"
+                }))
+                .child(
+                    Button::icon_only(
+                        "conversation.settle",
+                        if settled_now { "arrow-up" } else { "check" },
+                    )
+                    .kind(ButtonKind::Ghost)
+                    .on_click(move |_, _, cx| {
+                        devd(cx).sync.mutate(
+                            Mutation::new(
+                                "chat.settle",
+                                json!({ "thread": to_settle, "settled": !settled_now }),
+                            )
+                            .invalidating("chat"),
+                        );
+                    }),
+                )
+        })
         .children(last_event.map(|event| {
             div()
                 .id("conversation.fork.wrap")
@@ -862,6 +935,28 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
                         .text_color(t.text)
                         .child(ui::Clip::new(title)),
                 )
+                // The pull request this conversation is about, when one is linked: a quiet link
+                // beside the title, never a badge competing with it.
+                .children(thread["pr_url"].as_str().map(|url| {
+                    let (url, label) = (url.to_string(), pr_label(url));
+                    let (hover, muted, faint) = (t.text, t.muted, t.faint);
+                    div()
+                        .id("conversation.pr")
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .gap(px(4.0))
+                        .text_size(px(size::TEXT_SM))
+                        .text_color(muted)
+                        .cursor_pointer()
+                        .hover(move |s| s.text_color(hover))
+                        .child(ui::icon("external", 11.0, faint))
+                        .child(label)
+                        .tooltip(ui::tip("The pull request this conversation is about"))
+                        .on_click(move |_, _, _| {
+                            let _ = open::that(&url);
+                        })
+                }))
                 .children((!facts.is_empty()).then(|| {
                     div()
                         .flex_none()

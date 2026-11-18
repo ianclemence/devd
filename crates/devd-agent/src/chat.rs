@@ -813,6 +813,11 @@ impl Hub {
                     .store
                     .get_thread(id)?
                     .ok_or_else(|| DevdError::not_found(format!("no conversation `{id}`")))?;
+                // Speaking to a settled conversation is activity: it comes back into the working
+                // list, where the person just put it, rather than running out of sight on the shelf.
+                if t.settled_at.is_some() {
+                    self.ctx.store.set_thread_settled(id, false)?;
+                }
                 // A conversation that is working (or waiting on a person) accepts a message and
                 // keeps it for the next step. It is not appended to the log yet: a user message
                 // between a tool call and its result would break the sequence the model requires.
@@ -2836,6 +2841,36 @@ mod tests {
             run: None,
             dry_run: false,
         }
+    }
+
+    #[test]
+    fn a_message_to_a_settled_conversation_brings_it_back_to_the_working_list() {
+        let ctx = test_ctx("settle");
+        let hub = Hub::new(ctx.clone());
+        let thread = hub
+            .ctx
+            .store
+            .create_thread("settle", None, None, None)
+            .unwrap();
+        hub.ctx.store.set_thread_settled(&thread.id, true).unwrap();
+        hub.ctx
+            .store
+            .set_thread_state(&thread.id, "running", None)
+            .unwrap();
+        hub.send(
+            &ctx,
+            SendRequest {
+                thread_id: Some(thread.id.clone()),
+                message: "one more thing".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let after = hub.ctx.store.get_thread(&thread.id).unwrap().unwrap();
+        assert!(
+            after.settled_at.is_none(),
+            "speaking to a settled conversation reopens it instead of running out of sight"
+        );
     }
 
     #[test]
