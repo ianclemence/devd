@@ -209,6 +209,12 @@ pub struct ChatThread {
     /// sidebar groups under and what the run records — and this is where the files actually are.
     #[serde(default)]
     pub workdir: Option<String>,
+    /// Put aside until this instant, and back in the list by itself when it passes.
+    ///
+    /// Snoozing is not settling: settled work is finished, snoozed work is waiting for a better
+    /// hour. Stored as an RFC 3339 instant so a client can compare it without a time zone table.
+    #[serde(default)]
+    pub snoozed_until: Option<String>,
 }
 
 fn default_kind() -> String {
@@ -401,7 +407,7 @@ fn row_provider(r: &rusqlite::Row) -> rusqlite::Result<Provider> {
 
 const PROVIDER_COLS: &str =
     "id,kind,label,base_url,key_env,default_model,is_default,enabled,created_at,updated_at";
-const THREAD_COLS: &str = "id,title,project,provider_id,model,state,error,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,cost_usd,resume_at,pr_url,settled_at,created_at,updated_at,kind,effort,workdir";
+const THREAD_COLS: &str = "id,title,project,provider_id,model,state,error,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,cost_usd,resume_at,pr_url,settled_at,created_at,updated_at,kind,effort,workdir,snoozed_until";
 const REQ_COLS: &str = "id,actor,capability,args,plan,state,result,error,thread_id,tool_use_id,created_at,decided_at,decided_by,approval_id";
 
 fn row_thread(r: &rusqlite::Row) -> rusqlite::Result<ChatThread> {
@@ -426,6 +432,7 @@ fn row_thread(r: &rusqlite::Row) -> rusqlite::Result<ChatThread> {
         kind: r.get(17)?,
         effort: r.get(18)?,
         workdir: r.get(19)?,
+        snoozed_until: r.get(20)?,
     })
 }
 
@@ -635,11 +642,12 @@ impl Store {
             kind: kind.to_string(),
             effort: None,
             workdir: None,
+            snoozed_until: None,
         };
         self.with(|c| {
             c.execute(
-                &format!("INSERT INTO chat_threads ({THREAD_COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)"),
-                params![t.id, t.title, t.project, t.provider_id, t.model, t.state, t.error, t.input_tokens, t.output_tokens, t.cache_read_tokens, t.cache_write_tokens, t.cost_usd, t.resume_at, t.pr_url, t.settled_at, t.created_at, t.updated_at, t.kind, t.effort, t.workdir],
+                &format!("INSERT INTO chat_threads ({THREAD_COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21)"),
+                params![t.id, t.title, t.project, t.provider_id, t.model, t.state, t.error, t.input_tokens, t.output_tokens, t.cache_read_tokens, t.cache_write_tokens, t.cost_usd, t.resume_at, t.pr_url, t.settled_at, t.created_at, t.updated_at, t.kind, t.effort, t.workdir, t.snoozed_until],
             )?;
             Ok(())
         })?;
@@ -873,6 +881,20 @@ impl Store {
             c.execute(
                 "UPDATE chat_threads SET workdir=?2, updated_at=?3 WHERE id=?1",
                 params![id, workdir, util::now()],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Put a conversation aside until an instant, or bring it back now with `None`.
+    ///
+    /// The instant is stored, not a duration: a clock is not something to keep in a row, and a
+    /// client that opens the list later has to know when the conversation comes back.
+    pub fn set_thread_snooze(&self, id: &str, until: Option<&str>) -> Result<()> {
+        self.with(|c| {
+            c.execute(
+                "UPDATE chat_threads SET snoozed_until=?2, updated_at=?3 WHERE id=?1",
+                params![id, until, util::now()],
             )?;
             Ok(())
         })

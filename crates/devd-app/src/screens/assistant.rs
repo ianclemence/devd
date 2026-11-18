@@ -447,11 +447,15 @@ fn sidebar(current: Option<&str>, cx: &mut Context<Shell>) -> impl IntoElement {
         .collect();
     // What the person pinned is at the top, under a heading of its own, in the order it was pinned.
     own.sort_by_key(|th| th["pinned_at"].as_str().map(|at| (0, at.to_string())).unwrap_or((1, String::new())));
-    // Working conversations first, in their project's group. Settled work keeps its own shelf below
-    // them: out of the way, still one click from being reopened, and never mixed into active work.
-    let (mut settled, working): (Vec<&Value>, Vec<&Value>) = own
+    // Working conversations first, in their project's group. Snoozed work has its own shelf, and
+    // settled work the last one: both are out of the way, still one click from being opened, and
+    // never mixed into active work.
+    let (mut snoozed, rest): (Vec<&Value>, Vec<&Value>) = own
         .into_iter()
-        .partition(|th| th["settled_at"].is_string());
+        .partition(|th| snoozed_now(th));
+    snoozed.sort_by(|a, b| a["snoozed_until"].as_str().cmp(&b["snoozed_until"].as_str()));
+    let (mut settled, working): (Vec<&Value>, Vec<&Value>) =
+        rest.into_iter().partition(|th| th["settled_at"].is_string());
     settled.sort_by(|a, b| b["settled_at"].as_str().cmp(&a["settled_at"].as_str()));
     let mut last_project: Option<String> = None;
     for thread in working {
@@ -472,7 +476,27 @@ fn sidebar(current: Option<&str>, cx: &mut Context<Shell>) -> impl IntoElement {
             }
             last_project = project;
         }
-        column = column.child(thread_row(thread, current, false, cx));
+        column = column.child(thread_row(thread, current, false, false, cx));
+    }
+    if !snoozed.is_empty() {
+        let count = snoozed.len();
+        column = column.child(
+            div()
+                .px(px(10.0))
+                .pt(px(14.0))
+                .pb(px(4.0))
+                .child(eyebrow(
+                    if count == 1 {
+                        "SNOOZED".to_string()
+                    } else {
+                        format!("SNOOZED · {count}")
+                    },
+                    cx,
+                )),
+        );
+        for thread in snoozed {
+            column = column.child(thread_row(thread, current, true, true, cx));
+        }
     }
     if !settled.is_empty() {
         let count = settled.len();
@@ -491,7 +515,7 @@ fn sidebar(current: Option<&str>, cx: &mut Context<Shell>) -> impl IntoElement {
                 )),
         );
         for thread in settled {
-            column = column.child(thread_row(thread, current, true, cx));
+            column = column.child(thread_row(thread, current, true, false, cx));
         }
     }
     let clear = div().flex_none().p(px(8.0)).border_t_1().border_color(t.line).child(
@@ -545,19 +569,21 @@ fn sidebar(current: Option<&str>, cx: &mut Context<Shell>) -> impl IntoElement {
 
 /// One conversation in the list.
 ///
-/// A settled one reads as parked: dimmer, never live, and with the same actions, because a settled
-/// conversation can still be opened, reopened or deleted.
+/// A parked conversation — settled or snoozed — reads as parked: dimmer, never live, and with the
+/// same actions, because a parked conversation can still be opened, woken or deleted. A snoozed one
+/// says when it comes back instead of how long ago it moved.
 fn thread_row(
     thread: &Value,
     current: Option<&str>,
-    settled: bool,
+    parked: bool,
+    snoozed: bool,
     cx: &mut Context<Shell>,
 ) -> AnyElement {
     let t = theme(cx).clone();
     let id = thread["id"].as_str().unwrap_or_default().to_string();
     let said = devd_app_core::status::of(thread["state"].as_str().unwrap_or_default());
     let marker: AnyElement =
-        if settled || said.label.is_empty() || said.level == devd_app_core::status::Level::Neutral {
+        if parked || said.label.is_empty() || said.level == devd_app_core::status::Level::Neutral {
             div().size(px(7.0)).flex_none().into_any_element()
         } else {
             ui::state_mark(
@@ -588,7 +614,7 @@ fn thread_row(
         div()
             .flex_1()
             .min_w_0()
-            .text_color(if settled { t.muted } else { t.text })
+            .text_color(if parked { t.muted } else { t.text })
             .child(ui::Clip::new(title)),
     )
     .child(
@@ -596,7 +622,11 @@ fn thread_row(
             .flex_none()
             .text_size(px(size::TEXT_XS))
             .text_color(t.faint)
-            .child(ui::ago(thread["updated_at"].as_str().unwrap_or_default())),
+            .child(if snoozed {
+                ui::due_at(thread["snoozed_until"].as_str().unwrap_or_default())
+            } else {
+                ui::ago(thread["updated_at"].as_str().unwrap_or_default())
+            }),
     )
     .child(ui::row_action(
         gpui::ElementId::Name(format!("thread.delete.{id}").into()),
@@ -631,6 +661,7 @@ fn conversation_panel(
     title: &str,
     pinned: bool,
     settled: bool,
+    snoozed: bool,
     last_event: Option<i64>,
     pr_url: Option<&str>,
     cx: &mut Context<Shell>,
@@ -704,6 +735,38 @@ fn conversation_panel(
                 );
             }),
         ));
+    }
+    if snoozed {
+        let tid = id.to_string();
+        items.push((
+            "Wake it now",
+            false,
+            Box::new(move |_, _, cx| {
+                devd(cx).sync.mutate(
+                    Mutation::new("chat.snooze", json!({ "thread": tid })).invalidating("chat"),
+                );
+            }),
+        ));
+    } else {
+        for (label, until) in [
+            ("Snooze for an hour", snooze_in(1)),
+            ("Snooze until tomorrow", tomorrow_morning()),
+        ] {
+            let tid = id.to_string();
+            items.push((
+                label,
+                false,
+                Box::new(move |_, _, cx| {
+                    devd(cx).sync.mutate(
+                        Mutation::new(
+                            "chat.snooze",
+                            json!({ "thread": tid, "until": until.clone() }),
+                        )
+                        .invalidating("chat"),
+                    );
+                }),
+            ));
+        }
     }
     {
         let tid = id.to_string();
@@ -807,6 +870,33 @@ fn conversation_panel(
         }))
         .child(rows)
         .into_any_element()
+}
+
+/// Whether a conversation is put aside right now.
+///
+/// The stored instant is compared, not the string: a snooze a person set in another time zone is
+/// still a moment, and comparing text would put it on the shelf for the wrong length of time.
+fn snoozed_now(thread: &Value) -> bool {
+    thread["snoozed_until"]
+        .as_str()
+        .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
+        .is_some_and(|at| at > chrono::Utc::now())
+}
+
+/// An instant some hours from now, in the form `chat.snooze` takes.
+fn snooze_in(hours: i64) -> String {
+    (chrono::Utc::now() + chrono::Duration::hours(hours)).to_rfc3339()
+}
+
+/// Nine in the morning on the next day, in the machine's own time zone.
+fn tomorrow_morning() -> String {
+    use chrono::TimeZone;
+    let tomorrow = chrono::Local::now().date_naive() + chrono::Duration::days(1);
+    tomorrow
+        .and_hms_opt(9, 0, 0)
+        .and_then(|nine| chrono::Local.from_local_datetime(&nine).single())
+        .map(|at| at.to_rfc3339())
+        .unwrap_or_else(|| snooze_in(12))
 }
 
 /// What a linked pull request is called in a conversation's header: `PR 42`, `MR 7`, or the words
@@ -1417,6 +1507,7 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
                 &title,
                 pinned,
                 settled_now,
+                snoozed_now(thread),
                 last_event,
                 thread["pr_url"].as_str(),
                 cx,

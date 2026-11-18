@@ -2354,6 +2354,52 @@ fn a_template_fills_its_blanks_and_starts_the_team_with_its_definition_of_done()
 }
 
 #[test]
+fn a_conversation_can_be_put_aside_until_a_time_and_woken_by_hand() {
+    let e = env();
+    let t = e
+        .human
+        .store
+        .create_thread("Put aside", None, None, None)
+        .unwrap();
+    let until = (chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339();
+    call(
+        &e,
+        &e.human,
+        "chat.snooze",
+        json!({ "thread": t.id, "until": until }),
+        Approval::None,
+    )
+    .unwrap();
+    let got = e.human.store.get_thread(&t.id).unwrap().unwrap();
+    assert_eq!(
+        got.snoozed_until.as_deref(),
+        Some(until.as_str()),
+        "the instant is stored, so a client that opens later knows when it comes back"
+    );
+
+    // A time that has already passed is refused with a reason rather than accepted silently.
+    let past = (chrono::Utc::now() - chrono::Duration::minutes(1)).to_rfc3339();
+    assert!(
+        call(
+            &e,
+            &e.human,
+            "chat.snooze",
+            json!({ "thread": t.id, "until": past }),
+            Approval::None
+        )
+        .is_err(),
+        "a time that has passed is refused"
+    );
+
+    // Waking it by hand is the same call without a time.
+    call(&e, &e.human, "chat.snooze", json!({ "thread": t.id }), Approval::None).unwrap();
+    assert!(
+        e.human.store.get_thread(&t.id).unwrap().unwrap().snoozed_until.is_none(),
+        "no time means back in the list now"
+    );
+}
+
+#[test]
 fn deleting_a_conversation_takes_an_empty_worktree_and_keeps_one_with_work_in_it() {
     let e = env();
     let project = e.root.join("www").join("proj");

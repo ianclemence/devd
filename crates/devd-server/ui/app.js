@@ -11037,6 +11037,7 @@ var TERM_POLL_MS = 250;
       (AI.changes && AI.changes.branch && AI.changes.thread === t.id ? '<span class="chip" title="' + attr(AI.changes.branch + (AI.changes.ahead ? " · " + AI.changes.ahead + " to push" : "") + (AI.changes.behind ? " · " + AI.changes.behind + " to pull" : "")) + '"><svg class="icon" aria-hidden="true"><use href="#i-branch"></use></svg>' + esc(AI.changes.branch) + "</span>" : "") +
       (t.pr_url ? '<button type="button" class="chip chip-pr" data-action="open-url" data-url="' + attr(t.pr_url) + '" title="' + attr(t.pr_url) + '"><svg class="icon" aria-hidden="true"><use href="#i-branch"></use></svg>' + esc(prLabel(t.pr_url)) + "</button>" : "") +
       (t.settled_at ? '<span class="chip chip-ok" title="Settled ' + attr(ago(t.settled_at)) + '">Settled</span>' : "") +
+      (snoozedNow(t) ? '<span class="chip" title="Back in the list by itself">Snoozed until ' + esc(snoozedClock(t)) + "</span>" : "") +
       // Context links sit together, before the actions: where this conversation
       // came from, the run behind it, and the chapters inside it.
       (team && team.parent ? '<button type="button" class="btn btn-mini btn-ghost" data-action="open-thread" data-id="' + attr(team.parent) + '" title="The conversation that asked for this work">Back to request</button>' : "") +
@@ -11067,6 +11068,10 @@ var TERM_POLL_MS = 250;
       '<button type="button" role="menuitem" class="more-item" data-action="thread-link-pr"><span>' + (t.pr_url ? "Change the pull request" : "Link a pull request") + '</span><span class="more-hint">Shown on the conversation and in the list</span></button>' +
       (t.pr_url ? '<button type="button" role="menuitem" class="more-item" data-action="thread-unlink-pr"><span>Unlink the pull request</span></button>' : "") +
       '<button type="button" role="menuitem" class="more-item" data-action="thread-settle" data-settled="' + (t.settled_at ? "0" : "1") + '"><span>' + (t.settled_at ? "Reopen" : "Mark as settled") + '</span><span class="more-hint">' + (t.settled_at ? "Back among the open work" : "Done: it stays, quieter, in the list") + "</span></button>" +
+      (snoozedNow(t)
+        ? '<button type="button" role="menuitem" class="more-item" data-action="thread-snooze" data-until="now"><span>Wake it now</span><span class="more-hint">Back in the list</span></button>'
+        : '<button type="button" role="menuitem" class="more-item" data-action="thread-snooze" data-hours="1"><span>Snooze for an hour</span><span class="more-hint">Out of the way for a while</span></button>' +
+          '<button type="button" role="menuitem" class="more-item" data-action="thread-snooze" data-until="tomorrow"><span>Snooze until tomorrow</span><span class="more-hint">09:00, in your own time</span></button>') +
       '<div class="more-sep"></div>' +
       '<button type="button" role="menuitem" class="more-item btn-danger" data-action="chat-delete" data-id="' + attr(t.id) + '"><span>Delete</span></button>' +
       "</div></div>";
@@ -11091,6 +11096,15 @@ var TERM_POLL_MS = 250;
     var p = (state.projects || []).filter(function (x) { return x.path === path; })[0];
     return (p && p.name) || dirName(path);
   }
+  /* A conversation put aside until a time: still in the list, dimmer, and back by itself when the
+   * hour comes. Settled work is finished; snoozed work is waiting for a better moment. */
+  function snoozedNow(t) {
+    return !!(t && t.snoozed_until) && Date.parse(t.snoozed_until) > Date.now();
+  }
+  function snoozedClock(t) {
+    return new Date(t.snoozed_until).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+
   function threadState(t) {
     var s = t.state === "running" ? "run" : t.state === "waiting_approval" ? "wait" : t.state === "error" ? "bad" : "";
     if (!s && t.team && (t.team.task_state === "unverified" || t.team.task_state === "failed" || t.team.task_state === "blocked")) s = "bad";
@@ -11104,6 +11118,7 @@ var TERM_POLL_MS = 250;
     else if (running) bits.push('<span class="stand stand-run">Working</span>');
     else if (t.state === "error") bits.push('<span class="stand stand-bad">Stopped</span>');
     else if (t.settled_at) bits.push('<span class="stand stand-ok">Settled</span>');
+    else if (snoozedNow(t)) bits.push('<span class="stand">Snoozed until ' + esc(snoozedClock(t)) + "</span>");
     if (t.pr_url) bits.push('<span class="stand">' + esc(prLabel(t.pr_url).replace(/^.*#/, "PR #")) + "</span>");
     if (t.resume_at) bits.push('<span class="stand">resumes later</span>');
     return bits.join('<span class="stand-sep" aria-hidden="true">\u00b7</span>');
@@ -11185,8 +11200,9 @@ var TERM_POLL_MS = 250;
     return order.map(function (key) {
       var g = groups[key];
       g.items.sort(function (a, b) {
-        // Open work first, then by when it last moved; settled conversations sink.
-        if (!!a.settled_at !== !!b.settled_at) return a.settled_at ? 1 : -1;
+        // Open work first, then what is put aside, then what is settled; each by when it last moved.
+        var rank = function (t) { return t.settled_at ? 2 : snoozedNow(t) ? 1 : 0; };
+        if (rank(a) !== rank(b)) return rank(a) - rank(b);
         return a._at < b._at ? 1 : -1;
       });
       var closed = !!AI.groupClosed[key];
@@ -14789,8 +14805,22 @@ var TERM_POLL_MS = 250;
       closeMoreMenus();
       run("chat.settle", { thread: t.id, settled: n.dataset.settled === "1" }).then(function () { return pollThread(true); }).then(function () { refreshThreadList(); paintChat(true); });
     },
-    "thread-changes": function () {
+    "thread-snooze": function (n) {
       var t = AI.thread;
+      if (!t) return;
+      closeMoreMenus();
+      var args = { thread: t.id };
+      if (n.dataset.hours) {
+        args.until = new Date(Date.now() + Number(n.dataset.hours) * 3600e3).toISOString();
+      } else if (n.dataset.until === "tomorrow") {
+        var at = new Date();
+        at.setDate(at.getDate() + 1);
+        at.setHours(9, 0, 0, 0);
+        args.until = at.toISOString();
+      }
+      run("chat.snooze", args).then(function () { return pollThread(true); }).then(function () { refreshThreadList(); paintChat(true); });
+    },
+    "thread-changes": function () {      var t = AI.thread;
       if (!t) return;
       closeMoreMenus();
       openProject(t.workdir || t.project, "changes");

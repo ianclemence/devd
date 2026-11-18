@@ -804,6 +804,24 @@ A conversation can carry the pull request it is about: `chat.link_pr` records it
 (and the header shows it as a quiet link), and `chat.settle` is the record behind
 the shelf, so an agent, a script and the window agree on what is settled.
 
+## Putting a conversation aside
+
+Snoozing is not settling. Settling says the work is finished; snoozing says it can
+wait for a better hour. **Snooze for an hour** and **Snooze until tomorrow** in
+the conversation's menu (`chat.snooze`, human only) move it out of the working
+groups onto a **Snoozed** shelf, dimmed, with the time it comes back instead of
+how long ago it moved — "until 21:00", "until 09:00 tomorrow". It returns to the
+working list by itself when that time passes; no job runs, nothing is scheduled,
+the list simply asks a stored instant which side of now it is on. **Wake it now**
+clears it.
+
+The instant is stored, not a duration, and it is compared as a time rather than as
+text: a snooze set in another time zone is still a moment, and a client that opens
+the list an hour later has to agree with one that was already open. A time that has
+already passed is refused with the reason, and speaking to a snoozed conversation
+wakes it the way a message wakes a settled one — a message is the person asking
+for it now.
+
 ## A conversation's own worktree
 
 Two pieces of work on one checkout tread on each other: a stash, a branch switch, a half-finished

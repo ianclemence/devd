@@ -818,6 +818,10 @@ impl Hub {
                 if t.settled_at.is_some() {
                     self.ctx.store.set_thread_settled(id, false)?;
                 }
+                // The same for a snoozed one: a message is the person asking for it now.
+                if t.snoozed_until.is_some() {
+                    self.ctx.store.set_thread_snooze(id, None)?;
+                }
                 // A conversation that is working (or waiting on a person) accepts a message and
                 // keeps it for the next step. It is not appended to the log yet: a user message
                 // between a tool call and its result would break the sequence the model requires.
@@ -2885,6 +2889,40 @@ mod tests {
         assert!(
             after.settled_at.is_none(),
             "speaking to a settled conversation reopens it instead of running out of sight"
+        );
+    }
+
+    #[test]
+    fn a_message_to_a_snoozed_conversation_wakes_it() {
+        let ctx = test_ctx("snooze");
+        let hub = Hub::new(ctx.clone());
+        let thread = hub
+            .ctx
+            .store
+            .create_thread("snooze", None, None, None)
+            .unwrap();
+        let until = (chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339();
+        hub.ctx
+            .store
+            .set_thread_snooze(&thread.id, Some(&until))
+            .unwrap();
+        hub.ctx
+            .store
+            .set_thread_state(&thread.id, "running", None)
+            .unwrap();
+        hub.send(
+            &ctx,
+            SendRequest {
+                thread_id: Some(thread.id.clone()),
+                message: "now is the time".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let after = hub.ctx.store.get_thread(&thread.id).unwrap().unwrap();
+        assert!(
+            after.snoozed_until.is_none(),
+            "a message is the person asking for it now, so a snoozed conversation wakes"
         );
     }
 

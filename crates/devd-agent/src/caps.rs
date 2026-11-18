@@ -1272,6 +1272,15 @@ struct LinkPullRequest {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct SnoozeThread {
+    /// Conversation id.
+    thread: String,
+    /// When it comes back, as an RFC 3339 instant. Absent wakes it now.
+    #[serde(default)]
+    until: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct SettleThread {
     /// Conversation id.
     thread: String,
@@ -4651,6 +4660,39 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
                     ctx.store.set_thread_pr(&a.thread, None)?;
                 }
                 Ok(Outcome::ok("Linked this conversation to the pull request"))
+            },
+        )?;
+    reg.define::<SnoozeThread>("chat.snooze", "Put a conversation aside until later")
+        .description("Takes a conversation out of the working list until an instant, and puts it back by itself when the time passes. A snoozed conversation is not settled: settling says the work is finished, snoozing says it can wait for a better hour. `until` is an RFC 3339 instant; leave it out to bring the conversation back now. Speaking to a snoozed conversation wakes it.")
+        .tier(Tier::Write)
+        .effect(Effect::Write)
+        .human_only()
+        .dry_run()
+        .handlers(
+            |_, a| simple("chat.snooze", format!("snooze conversation {}", a.thread)),
+            |ctx, a| {
+                ctx.store
+                    .get_thread(&a.thread)?
+                    .ok_or_else(|| DevdError::not_found("no such conversation"))?;
+                let until = match a.until.as_deref() {
+                    None => None,
+                    Some(text) => {
+                        let at = chrono::DateTime::parse_from_rfc3339(text).map_err(|_| {
+                            DevdError::invalid(format!("`{text}` is not an instant devd can read"))
+                        })?;
+                        if at <= chrono::Utc::now() {
+                            return Err(DevdError::invalid(
+                                "that time has already passed: wake it, or choose a later time",
+                            ));
+                        }
+                        Some(at.to_rfc3339())
+                    }
+                };
+                ctx.store.set_thread_snooze(&a.thread, until.as_deref())?;
+                Ok(Outcome::ok(match &until {
+                    Some(at) => format!("Put aside until {at}"),
+                    None => "Back in the working list".to_string(),
+                }))
             },
         )?;
     reg.define::<SettleThread>("chat.settle", "Settle or reopen a conversation")
