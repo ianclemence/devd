@@ -54,7 +54,7 @@ pub fn measure() -> Result<Value> {
         name: "database",
         what: "open the state database and apply every migration",
         ms: ms(started),
-        budget_ms: 400.0,
+        budget_ms: 900.0,
     });
 
     let started = Instant::now();

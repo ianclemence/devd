@@ -863,7 +863,8 @@ fn conversation_panel(facts: PanelFacts<'_>, cx: &mut Context<Shell>) -> AnyElem
     div()
         .absolute()
         .top(px(44.0))
-        .right(px(10.0))
+        // Lined up with the right edge of the header's last button, so the menu looks attached to it.
+        .right(px(24.0))
         .w(px(232.0))
         .p(px(5.0))
         .flex()
@@ -1272,11 +1273,8 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
     actions = actions.child(
         div()
             .id("conversation.more.wrap")
-            .tooltip(ui::tip(if shell.conversation_menu {
-                "Close the conversation menu"
-            } else {
-                "Conversation menu"
-            }))
+            // No tooltip while the menu is open: it would sit on top of the menu it opened.
+            .when(!shell.conversation_menu, |d| d.tooltip(ui::tip("Conversation menu")))
             .child(
                 Button::icon_only("conversation.more", "more")
                     .kind(if shell.conversation_menu {
