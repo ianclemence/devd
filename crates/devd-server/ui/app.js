@@ -5744,6 +5744,22 @@ var TERM_POLL_MS = 250;
       });
   }
 
+  /* What a person has read in this review, by project and path. Session only: it is a reading aid,
+   * not a record of anything the host should keep. */
+  function gitReadKey(path) {
+    return (state.project && state.project.path ? state.project.path : "") + "|" + path;
+  }
+  function gitRead(path) {
+    state.gitRead = state.gitRead || {};
+    return !!state.gitRead[gitReadKey(path)];
+  }
+  function setGitRead(path, on) {
+    state.gitRead = state.gitRead || {};
+    var key = gitReadKey(path);
+    if (on) state.gitRead[key] = 1;
+    else delete state.gitRead[key];
+  }
+
   function fileRow(kind, change) {
     var path = typeof change === "string" ? change : change.path;
     // Git reports untracked and conflicted files as bare paths. The group the
@@ -5767,8 +5783,10 @@ var TERM_POLL_MS = 250;
       actions.push(mini("Theirs", "resolve-theirs", { path: path }));
     }
     var selected = state.diff && state.diff.path === path ? " selected" : "";
+    var read = gitRead(path);
     return (
-      '<div class="row' + selected + '">' +
+      '<div class="row' + selected + (read ? " is-read" : "") + '">' +
+      '<button type="button" class="read-dot' + (read ? " is-read" : "") + '" data-action="git-read" data-path="' + attr(path) + '" aria-pressed="' + (read ? "true" : "false") + '" title="' + (read ? "Read: press to mark it unread" : "Mark it read") + '" aria-label="' + (read ? "Mark it unread" : "Mark it read") + '"></button>' +
       statusTag(code) +
       '<span class="row-main nowrap" title="' + attr(path) + '">' + esc(path) + "</span>" +
       '<span class="row-actions">' + actions.join("") + "</span>" +
@@ -5778,9 +5796,17 @@ var TERM_POLL_MS = 250;
 
   function fileGroup(label, kind, items) {
     if (!items || !items.length) return "";
+    var paths = items.map(function (c) { return typeof c === "string" ? c : c.path; });
+    var read = paths.filter(gitRead).length;
+    var allRead = read === paths.length;
     return (
       '<div class="file-group">' +
-      '<div class="file-group-head"><span>' + esc(label) + '</span><span class="right">' + items.length + "</span></div>" +
+      '<div class="file-group-head"><span>' + esc(label) + (read ? ' <span class="read-count">' + read + " read</span>" : "") + '</span>' +
+      '<span class="right">' +
+      // Quiet, like the window's: reading is not a change to the repository, and the staging
+      // buttons are what a person came here to press.
+      '<button type="button" class="mark-read" data-action="git-read-all" data-kind="' + attr(kind) + '">' + (allRead ? "Mark all unread" : "Mark all read") + "</button>" +
+      "<span>" + items.length + "</span></span></div>" +
       items.map(function (c) { return fileRow(kind, c); }).join("") +
       "</div>"
     );
@@ -16363,6 +16389,19 @@ var TERM_POLL_MS = 250;
       }
     },
 
+    "git-read": function (node) {
+      var path = node.dataset.path;
+      setGitRead(path, !gitRead(path));
+      render();
+    },
+    "git-read-all": function (node) {
+      var st = state.project.status || {};
+      var items = st[node.dataset.kind] || [];
+      var paths = items.map(function (c) { return typeof c === "string" ? c : c.path; });
+      var all = paths.length > 0 && paths.every(gitRead);
+      paths.forEach(function (path) { setGitRead(path, !all); });
+      render();
+    },
     "diff-file": function (node) {
       var path = node.dataset.path;
       var staged = node.dataset.staged === "1";

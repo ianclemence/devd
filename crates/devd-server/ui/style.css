@@ -1730,6 +1730,33 @@ kbd {
 .row:last-child { border-bottom: 0; }
 .row.selected { background: var(--accent-quiet); }
 .row-main { flex: 1; min-width: 0; font-family: var(--mono); font-size: var(--text-sm); }
+/* Read marks: a change that has been read steps back, so the unreviewed ones are what the eye
+   finds first. The same dot as the window's Changes list, hollow until pressed. */
+.row.is-read .row-main { color: var(--fg-dim); }
+.read-dot {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  cursor: pointer;
+  transition: background-color var(--fast), border-color var(--fast);
+}
+.read-dot:hover { border-color: var(--fg-dim); }
+.read-dot.is-read { background: var(--fg-dim); border-color: var(--fg-dim); }
+.read-count { color: var(--fg-dim); font-weight: 400; }
+.mark-read {
+  border: 0;
+  background: none;
+  padding: 0 var(--s1);
+  color: var(--fg-dim);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+.mark-read:hover { color: var(--color-base-content); }
 .row-actions { display: flex; gap: var(--s1); flex: 0 0 auto; opacity: 0; transition: opacity var(--fast); }
 .row.selected .row-actions, .row-actions:focus-within { opacity: 1; }
 .row-sub { color: var(--fg-dim); font-size: var(--text-xs); line-height: 1.5; }
