@@ -824,6 +824,11 @@ Every member's brief says the room exists and how to speak in it, on the first a
 restart, because a member that does not know it can be heard cannot ask a question, comment on a
 change, or answer the teammate who addressed it.
 
+The browser client reads the same room: a conversation that belongs to a run draws every member's
+messages from `chat.team_log`, each turn under the name and face of the role that opened it, a change
+of speaker starting a new turn, and an addressed message as its own quiet block with `@who` and what
+it is about.
+
 ## Settling a conversation
 
 A finished conversation leaves the working list without being deleted: **Settle**
