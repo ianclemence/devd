@@ -806,6 +806,14 @@ face and name of the role that wrote it, the person's own messages among them, a
 sending into the room rather than into one agent's ear. The per-specialist conversations remain
 reachable as the detail behind a bubble.
 
+**Talking in the room.** `chat.talk` posts a message into the run's conversation: `to` addresses a
+role (`@reviewer`), `about` names the task it is about, and both are kept with the message so the
+room can show what it answers. The role that speaks is the conversation the call came from — a
+specialist's own thread says `from: implementer`, the conversation that started the run says
+`from: devd` — and an address to a role the run does not have is refused with the roles it does
+have. A message never starts a turn by itself: it is speech, and the scheduler still decides when an
+agent works.
+
 ## Settling a conversation
 
 A finished conversation leaves the working list without being deleted: **Settle**

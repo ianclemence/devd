@@ -2448,6 +2448,47 @@ fn a_team_run_reads_as_one_group_chat_with_a_bubble_for_each_role() {
     .unwrap();
     assert_eq!(from_agent["run"], json!(run.id));
     assert_eq!(from_agent["events"].as_array().unwrap().len(), 3);
+    // The room carries talk between teammates: addressed, tagged with who said it, kept with what
+    // it was about.
+    call(
+        &e,
+        &e.human,
+        "chat.talk",
+        json!({
+            "thread": origin.id,
+            "to": "reviewer",
+            "about": "api",
+            "text": "The parser is done — can you look at the retry loop?"
+        }),
+        Approval::None,
+    )
+    .unwrap();
+    let with_talk = call(
+        &e,
+        &e.human,
+        "chat.team_log",
+        json!({ "thread": written[0].clone() }),
+        Approval::None,
+    )
+    .unwrap();
+    let talk = with_talk["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["kind"] == "agent")
+        .expect("the message is in the room");
+    assert_eq!(talk["data"]["to"], json!("reviewer"));
+    assert_eq!(talk["data"]["about"], json!("api"));
+    assert_eq!(talk["data"]["from"], json!("devd"));
+    // A message addressed to a role the run does not have is refused, with the roles it does have.
+    let refused = call(
+        &e,
+        &e.human,
+        "chat.talk",
+        json!({ "thread": origin.id, "to": "sysadmin", "text": "hello" }),
+        Approval::None,
+    );
+    assert!(refused.is_err(), "an address nobody has is refused");
 }
 
 #[test]

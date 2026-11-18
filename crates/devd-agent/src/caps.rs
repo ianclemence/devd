@@ -1223,6 +1223,20 @@ struct SendArgs {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct TalkArgs {
+    /// The conversation the message belongs to: any conversation of the run.
+    thread: String,
+    /// The role it is addressed to, when it is addressed to one.
+    #[serde(default)]
+    to: Option<String>,
+    /// What it is about: a task's key, or the step being discussed.
+    #[serde(default)]
+    about: Option<String>,
+    /// What was said.
+    text: String,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct TeamLogArgs {
     /// Any conversation of the run: the one that asked for it, or one of its agents.
     thread: String,
@@ -4664,6 +4678,68 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
                         "threads": threads,
                         "events": events,
                     }),
+                ))
+            },
+        )?;
+    let room = hub.clone();
+    reg.define::<TalkArgs>("chat.talk", "Say something to the room")
+        .description("Posts a message into the conversation a run belongs to, the way a group chat works. Any conversation of the run can be used. `to` addresses a role (`@reviewer`), `about` names the task the message is about, and both are kept with the message so the room can show what it was in reply to. Use it to ask a teammate a question, comment on what someone did, or tell the person what you are doing; it never starts a turn by itself.")
+        .tier(Tier::Write)
+        .effect(Effect::Write)
+        .dry_run()
+        .handlers(
+            |_, a| simple("chat.talk", format!("say something in the room of {}", a.thread)),
+            move |ctx, a| {
+                ctx.store
+                    .get_thread(&a.thread)?
+                    .ok_or_else(|| DevdError::not_found("no such conversation"))?;
+                let Some(run_id) = ctx.store.run_of_thread(&a.thread)? else {
+                    return Err(DevdError::invalid(
+                        "this conversation is not part of a team run; use chat.send to speak to it",
+                    ));
+                };
+                let origin = ctx
+                    .store
+                    .run_thread(&run_id)?
+                    .unwrap_or_else(|| a.thread.clone());
+                // Who is speaking: the role of the conversation the call came from, or devd itself
+                // when the call came from the conversation that started the run.
+                let from = ctx
+                    .store
+                    .role_of_thread(&a.thread)?
+                    .unwrap_or_else(|| "devd".to_string());
+                // A message addressed to a role must name one this run has, or it is addressed to
+                // nobody and should not pretend otherwise.
+                if let Some(to) = a.to.as_deref() {
+                    let known: Vec<String> = ctx
+                        .store
+                        .list_tasks_of_run(&run_id)?
+                        .into_iter()
+                        .map(|t| t.role)
+                        .collect();
+                    if !known.iter().any(|role| role == to) {
+                        return Err(DevdError::invalid(format!(
+                            "this run has no `{to}`; it has {}",
+                            known.join(", ")
+                        )));
+                    }
+                }
+                room.log(
+                    &origin,
+                    "agent",
+                    json!({
+                        "from": from,
+                        "to": a.to,
+                        "about": a.about,
+                        "text": a.text,
+                    }),
+                )?;
+                Ok(Outcome::with_data(
+                    match a.to.as_deref() {
+                        Some(to) => format!("Posted to the room, addressed to {to}"),
+                        None => "Posted to the room".to_string(),
+                    },
+                    json!({ "run": run_id, "origin": origin, "from": from }),
                 ))
             },
         )?;
