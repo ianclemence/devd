@@ -644,6 +644,12 @@ fn task_brief(
     if !directions.is_empty() {
         s.push_str(&format!("\n# Instructions the person added while the work was under way (they take priority)\n{}\n", directions.iter().map(|d| format!("- {d}")).collect::<Vec<_>>().join("\n")));
     }
+    // The room: a run is one conversation, and a member who cannot speak in it is a private chat the
+    // person has to hunt for. It is short because it is read on every task, and it says what the
+    // member can do rather than describing the mechanism.
+    s.push_str(
+        "\n# The room\nEvery member of this run is in one conversation with the person, and you speak in it with `chat.talk`: `to` names a member (the same names the roster uses), `about` names the task or step you are talking about. A message another member addresses to you arrives here as a message from them. Use it to ask the member who wrote something a question, to say what you found in their change, and to answer anyone who addresses you. Comment on the work rather than the person: name what you would change and why.\n",
+    );
     if let Some(feedback) = t.error.as_ref().filter(|_| t.attempts > 0) {
         s.push_str(&format!(
             "\n# Why the previous attempt was not accepted\n{feedback}\n"
@@ -4206,6 +4212,9 @@ mod brief_tests {
         let full = task_brief(&s, &home, &run, &t, tasks, true);
         let again = task_brief(&s, &home, &run, &t, tasks, false);
         assert!(full.contains("THE WHOLE GOAL") && full.contains("THE INSTRUCTIONS"));
+        // Every member is told the room exists, on both the first brief and a restart: a member that
+        // does not know it can speak cannot ask, comment on a change, or answer a teammate.
+        assert!(full.contains("# The room") && again.contains("# The room"));
         assert!(
             !again.contains("THE WHOLE GOAL") && !again.contains("THE INSTRUCTIONS"),
             "the restart must not pay for the brief it already has: {again}"

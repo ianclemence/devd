@@ -820,6 +820,10 @@ The composer in a room speaks to the team, not only to the assistant: sending wh
 also records the message as a direction for the run (`team.say`), so speaking during the work steers
 it — tasks that have not started take the instruction, and running tasks get it when they next stop.
 
+Every member's brief says the room exists and how to speak in it, on the first attempt and on every
+restart, because a member that does not know it can be heard cannot ask a question, comment on a
+change, or answer the teammate who addressed it.
+
 ## Settling a conversation
 
 A finished conversation leaves the working list without being deleted: **Settle**
