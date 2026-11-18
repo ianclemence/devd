@@ -819,6 +819,8 @@ is what bounds a conversation between agents, not the harness refusing to delive
 The composer in a room speaks to the team, not only to the assistant: sending while a run is open
 also records the message as a direction for the run (`team.say`), so speaking during the work steers
 it — tasks that have not started take the instruction, and running tasks get it when they next stop.
+The browser client's composer does the same, and a run that has already finished refusing the
+direction is not shown as a failed message, because the message itself was delivered.
 
 Every member's brief says the room exists and how to speak in it, on the first attempt and on every
 restart, because a member that does not know it can be heard cannot ask a question, comment on a

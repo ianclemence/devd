@@ -9213,7 +9213,9 @@ var TERM_POLL_MS = 250;
       if (!runId) {
         AI.room = null;
         AI.roomFor = null;
-      } else if (AI.roomFor !== runId || !full) {
+      } else if (AI.roomFor !== runId || (d.events || []).length) {
+        // Read the room when the conversation opens and again whenever a poll brought something
+        // new; a poll that brought nothing must not pay for the whole run's log.
         AI.roomFor = runId;
         read("chat.team_log", { thread: d.thread.id, limit: 400 }).then(function (log) {
           if (!AI.thread || AI.thread.id !== d.thread.id) return;
@@ -17184,6 +17186,15 @@ var TERM_POLL_MS = 250;
     run("chat.send", args, { quiet: true, rethrow: true }).then(function (o) {
       if (!o) return;
       outboxRemove(args.client_id);
+      // In a room the message is said to the team, not only to the assistant: it becomes an
+      // instruction for the run, so speaking while it works steers the work instead of waiting for
+      // the assistant to relay it. A conversation outside a run has no one else to tell.
+      if (AI.roomFor && args.message) {
+        run("team.say", { run: AI.roomFor, text: args.message }, { quiet: true }).catch(function () {
+          // A run that has finished refuses a direction; that is not a failure of the message,
+          // which went to the conversation, so it is not shown as one.
+        });
+      }
       if (!args.thread) { draftSave(""); AI.askText = ""; }
       var id = (o.data && (o.data.id || o.data.thread)) || args.thread;
       if (!id) return;
