@@ -776,6 +776,19 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
         shell.compose.thread = Some(id.to_string());
         shell.compose.effort = super::compose::level(thread["effort"].as_str());
     }
+    // What this conversation's working tree has changed, for the branch beside the title and the
+    // count on the Changes action. A conversation with no project, or one whose project is not a
+    // repository, simply has nothing to say here.
+    let changes = devd(cx)
+        .sync
+        .watch(&q::thread_changes(id))
+        .data
+        .clone()
+        .map(|v| (*v).clone())
+        .unwrap_or(Value::Null);
+    let branch = changes["branch"].as_str().map(str::to_string);
+    let dirty = changes["clean"] == json!(false);
+    let changed = changes["files"].as_array().map(Vec::len).unwrap_or(0);
     if running {
         devd(cx).chat_running.set(true);
     }
@@ -900,18 +913,40 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
         actions = actions.child(
             div()
                 .id("conversation.changes.wrap")
-                .tooltip(ui::tip("Review the changes, then commit and push"))
+                .tooltip(ui::tip(match changed {
+                    0 => "Review the changes, then commit and push".to_string(),
+                    1 => "1 file changed — review it, then commit and push".to_string(),
+                    n => format!("{n} files changed — review them, then commit and push"),
+                }))
                 .child(
-                    Button::icon_only("conversation.changes", "diff")
-                        .kind(ButtonKind::Ghost)
-                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            this.go(
-                                Route::project(
-                                    open.clone(),
-                                    devd_app_core::project::ProjectTab::Changes,
-                                ),
-                                cx,
-                            )
+                    div()
+                        .relative()
+                        .child(
+                            Button::icon_only("conversation.changes", "diff")
+                                .kind(if dirty {
+                                    ButtonKind::Secondary
+                                } else {
+                                    ButtonKind::Ghost
+                                })
+                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                    this.go(
+                                        Route::project(
+                                            open.clone(),
+                                            devd_app_core::project::ProjectTab::Changes,
+                                        ),
+                                        cx,
+                                    )
+                                })),
+                        )
+                        // A dot, not a badge: the count is in the tooltip and the Changes screen.
+                        .children(dirty.then(|| {
+                            div()
+                                .absolute()
+                                .top(px(2.0))
+                                .right(px(2.0))
+                                .size(px(6.0))
+                                .rounded_full()
+                                .bg(t.warn)
                         })),
                 ),
         );
@@ -941,11 +976,25 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
         );
     }
     let last_event = events.last().and_then(|e| e["id"].as_i64());
+    // A hairline between the work (stop, worktree, changes, review) and the quiet actions that
+    // appear with it, so six icons never read as one undifferentiated row.
+    actions = actions.child(
+        div()
+            .w(px(1.0))
+            .h(px(16.0))
+            .mx(px(4.0))
+            .flex_none()
+            .bg(t.line)
+            .opacity(0.4)
+            .group_hover("convo.head", |s| s.opacity(1.0)),
+    );
     let (to_pin, to_fork, fork_title) = (id.to_string(), id.to_string(), title.clone());
     actions = actions
         .child(
             div()
                 .id("conversation.pin.wrap")
+                .opacity(0.4)
+                .group_hover("convo.head", |s| s.opacity(1.0))
                 .tooltip(ui::tip(if pinned { "Unpin from the top of the list" } else { "Pin to the top of the list" }))
                 .child(
                     Button::icon_only("conversation.pin", "pin")
@@ -961,6 +1010,8 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
             let to_settle = id.to_string();
             div()
                 .id("conversation.settle.wrap")
+                .opacity(0.4)
+                .group_hover("convo.head", |s| s.opacity(1.0))
                 .tooltip(ui::tip(if settled_now {
                     "Reopen: back into the working list"
                 } else {
@@ -986,8 +1037,10 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
         .children(last_event.map(|event| {
             div()
                 .id("conversation.fork.wrap")
+                .opacity(0.4)
+                .group_hover("convo.head", |s| s.opacity(1.0))
                 .tooltip(ui::tip("Fork: a new conversation from here, leaving this one as it is"))
-                .child(Button::icon_only("conversation.fork", "branch").on_click(move |_, _, cx| {
+                .child(Button::icon_only("conversation.fork", "copy").on_click(move |_, _, cx| {
                     devd(cx).sync.mutate(
                         Mutation::new(
                             "chat.fork",
@@ -1001,6 +1054,8 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
     actions = actions.child(
         div()
             .id("conversation.delete.wrap")
+            .opacity(0.4)
+            .group_hover("convo.head", |s| s.opacity(1.0))
             .tooltip(ui::tip("Delete conversation"))
             .child(
                 Button::icon_only("conversation.delete", "trash").on_click(cx.listener(
@@ -1023,6 +1078,10 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
         .flex_none()
         .items_center()
         .gap(px(16.0))
+        // The quiet actions (pin, settle, fork, delete) belong to the header and appear when the
+        // pointer is on it, so the bar shows the work — Stop, Worktree, Changes, a review — not a row
+        // of eight identical icons.
+        .group("convo.head")
         .border_b_1()
         .border_color(t.line)
         .child(
@@ -1039,6 +1098,15 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
                         .text_color(t.text)
                         .child(ui::Clip::new(title)),
                 )
+                // The branch, when this conversation works on one of its own: a quiet fact beside
+                // the title, the same weight as the pull request link under it.
+                .children(branch.map(|b| {
+                    div()
+                        .flex_none()
+                        .text_size(px(size::TEXT_XS))
+                        .text_color(t.faint)
+                        .child(b)
+                }))
                 // The pull request this conversation is about, when one is linked: a quiet link
                 // beside the title, never a badge competing with it.
                 .children(thread["pr_url"].as_str().map(|url| {

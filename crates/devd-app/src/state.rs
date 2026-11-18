@@ -723,6 +723,11 @@ pub mod q {
         QueryKey::new("chat.get", json!({ "thread": id }))
     }
 
+    /// What a conversation's working tree has changed, and where its branch is.
+    pub fn thread_changes(id: &str) -> QueryKey {
+        QueryKey::new("chat.changes", json!({ "thread": id }))
+    }
+
     /// How a conversation's events are read in pieces.
     pub fn thread_log() -> LogSpec {
         // `chat.get` returns at most 500 events for one call.
