@@ -1906,7 +1906,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
     .handlers(
         |_, _| simple("perf.measure", "measure devd's own work"),
         |_ctx, _| {
-            let measured = crate::perf::measure()?;
+            let measured = crate::perf::measure(_ctx.paths.root())?;
             let said = if measured["ok"].as_bool().unwrap_or(false) {
                 "Every reading is inside its budget"
             } else {

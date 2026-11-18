@@ -1784,8 +1784,35 @@ impl Shell {
     }
 }
 
+/// Write down how long this launch took to draw something, once.
+///
+/// The reading is kept beside the state so `perf.measure` can report the last launch instead of
+/// guessing, and so the Speed card shows what a person actually waited for rather than what the
+/// runtime thinks of itself. It is written on the first frame and never again in the process.
+fn note_first_frame(home: &str) {
+    static WRITTEN: std::sync::Once = std::sync::Once::new();
+    WRITTEN.call_once(|| {
+        let Some(started) = crate::STARTED.get() else {
+            return;
+        };
+        let record = serde_json::json!({
+            "ms": started.elapsed().as_secs_f64() * 1000.0,
+            "connect_ms": crate::CONNECTED_MS.get().copied(),
+            "theme_ms": crate::THEME_MS.get().copied(),
+            "version": env!("CARGO_PKG_VERSION"),
+            "at": chrono::Utc::now().to_rfc3339(),
+        });
+        let _ = std::fs::write(
+            std::path::Path::new(home).join("startup.json"),
+            record.to_string(),
+        );
+    });
+}
+
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // The first frame is the number a person feels, so it is written down once per launch.
+        note_first_frame(&devd(cx).conn.home);
         // Which conversation is in front is decided again every frame, by the screen that draws one.
         cx.global_mut::<Devd>().open_thread = None;
         // The close button was pressed while a scaffold ran: ask before losing it.

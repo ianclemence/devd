@@ -526,6 +526,16 @@ pub fn tab_strip(current: &Route, cx: &mut Context<Shell>) -> Option<Div> {
     Some(strip)
 }
 
+/// A span of time the way a person reads one: milliseconds while they are milliseconds, seconds
+/// once waiting is what is happening.
+fn duration(ms: f64) -> String {
+    if ms >= 1_000.0 {
+        format!("{:.1} s", ms / 1_000.0)
+    } else {
+        format!("{ms:.0} ms")
+    }
+}
+
 fn frame(
     id: &'static str,
     detail: impl Into<SharedString>,
@@ -2841,7 +2851,7 @@ fn diagnostics(cx: &mut Context<Shell>) -> AnyElement {
             all_inside &= ok;
             speed.push(Row {
                 title: text(m, "what"),
-                sub: format!("{ms:.1} ms now, against a {budget:.0} ms line"),
+                sub: format!("{} now · line {}", duration(ms), duration(budget)),
                 state: Some(if ok {
                     (Tone::Ok, "inside".to_string())
                 } else {

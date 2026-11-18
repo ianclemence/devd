@@ -862,6 +862,22 @@ opening and migrating the state database, writing 500 conversations, listing the
 events to one log, and reading that conversation back. Each reading carries a budget, and the
 answer says whether it is inside it.
 
+Every reading is the **best of three runs**, because it is measured from a window that is also
+drawing and a server that is also serving: the minimum reports the work, an average reports the
+machine's mood.
+
+The window writes its own launch to `startup.json` beside the state on its first frame, and
+`perf.measure` reports it as two readings rather than one, because they are two waits:
+
+| Reading | Warm devd | Cold devd |
+|---|---|---|
+| **devd ready** — wait for a running devd, starting one if needed | ~150 ms | 4–6 s |
+| **window** — from there to the first frame | ~0.9 s debug | ~0.9 s debug |
+
+The split is why they are separate: a single number would say "devd takes six seconds", which is
+true only when nothing was running, and would hide the other five and a half seconds that no longer
+happen. Cold start is measured, visible on the Diagnostics screen, and the next lever.
+
 The budgets are **regression lines, not targets**: several times what the work costs on an ordinary
 machine, so a busy afternoon is not a failure and a change that makes the harness ten times slower
 is. The same readings run as a test, with a wider line so a loaded build machine does not fail the

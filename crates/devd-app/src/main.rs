@@ -26,7 +26,16 @@ use gpui::{
     App, AppContext, Application, Bounds, TitlebarOptions, WindowBounds, WindowOptions, px, size,
 };
 
+/// When this program started, for the first-frame reading the window reports.
+pub static STARTED: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+/// How long it took to be talking to a devd, and to have its theme: the two phases before a window.
+pub static CONNECTED_MS: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
+/// How long it took to read the theme library and load the theme.
+pub static THEME_MS: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
+
 fn main() {
+    // Set before anything else, so the reading covers everything a person waits through.
+    let _ = STARTED.set(std::time::Instant::now());
     // `devd-app --register-links` makes the operating system open devd:// links with this program.
     if std::env::args().nth(1).as_deref() == Some("--register-links") {
         let result = std::env::current_exe()
@@ -49,6 +58,9 @@ fn main() {
             std::process::exit(1);
         }
     };
+    if let Some(started) = STARTED.get() {
+        let _ = CONNECTED_MS.set(started.elapsed().as_secs_f64() * 1000.0);
+    }
     // `devd-app /sites/blog` opens on that place: the same text a link or an
     // agent uses to name it.
     let start = std::env::args()
@@ -57,6 +69,9 @@ fn main() {
         .unwrap_or(devd_app_core::nav::Route::Home);
     let library = theme::Library::read(std::path::Path::new(&conn.home));
     let start_theme = theme::load(std::path::Path::new(&conn.home), &library);
+    if let Some(started) = STARTED.get() {
+        let _ = THEME_MS.set(started.elapsed().as_secs_f64() * 1000.0);
+    }
     let closing = conn.clone();
     Application::new()
         .with_assets(assets::Assets)
