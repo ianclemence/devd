@@ -10,6 +10,35 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.39.1] - 2026-11-20 - The room, corrected
+
+0.39.0 made a run one conversation. Reading it back from a real run found the
+seam: a *member's* conversation had become the room too.
+
+### Fixed
+
+- **The room is the conversation the run was started from.** A specialist's own
+  conversation keeps its task, its branch and its own turns, and offers **In the
+  room** to jump to the conversation the team shares. Before, opening Backend's
+  chat showed you what Implementer said — three identities on one screen.
+- **`chat.team_log` reports the origin honestly.** A run started by a command has
+  no origin conversation; the read used to return the thread it was asked from as
+  the origin, which made every specialist look like the room.
+- **A conversation that started a run is named by the run's goal in the list**,
+  not only in its header: "A team run (id 6548ec1b-…)" was a database key wearing
+  a sentence, and one conversation had two names.
+- **Consecutive messages from one member share one heading**, the way a group chat
+  reads. A tool line between them does not repeat the name; another member
+  speaking does.
+- **A failed step wraps.** The reason a step failed is the one line that must be
+  whole; it was cut at the column's edge.
+- **The line saying what is running wraps**, so the test that is taking seven
+  minutes is readable.
+- **"A message sent now is read at its next step"** — the queued-message hint said
+  "A message now is read at its next step".
+
+---
+
 ## [0.39.0] - 2026-11-19 - The team is one conversation
 
 A run used to be one private conversation per specialist. To see what the team

@@ -42,6 +42,8 @@ pub enum Item {
         blocks: Vec<Block>,
         model: String,
         role: Option<String>,
+        /// Whether this is a teammate's turn rather than the assistant's: it is drawn as a bubble.
+        bubble: bool,
         /// The conversation it was said in, when the item came from a room's merged log.
         thread: Option<String>,
     },
@@ -79,6 +81,10 @@ pub fn fold(events: &[Value], pending: &[&str], running: bool) -> Vec<Item> {
     let mut items: Vec<Item> = Vec::new();
     // Where each tool call landed, so its result can be attached to it.
     let mut calls: HashMap<String, usize> = HashMap::new();
+    // Who spoke last, so consecutive messages from one member collapse under one heading the way a
+    // group chat does. A tool line between them does not change who is talking; another member
+    // speaking, or the person writing, does.
+    let mut speaker: Option<String> = None;
     // Output tokens, cost and time of the model's replies since the person last spoke.
     let mut turn: (u64, f64, u64) = (0, 0.0, 0);
     for event in events {
@@ -133,10 +139,16 @@ pub fn fold(events: &[Value], pending: &[&str], running: bool) -> Vec<Item> {
                         "text" => {
                             let text = block["text"].as_str().unwrap_or_default();
                             if !text.trim().is_empty() {
+                                let role = event["role"].as_str().map(str::to_string);
+                                let heading = role.is_some() && speaker != role;
+                                speaker = role.clone();
                                 items.push(Item::Devd {
                                     blocks: markdown::parse(text),
                                     model: model.clone(),
-                                    role: event["role"].as_str().map(str::to_string),
+                                    role: if heading { role } else { None },
+                                    // A teammate's turn is a bubble even when its heading is folded
+                                    // into the one above it.
+                                    bubble: event["role"].is_string(),
                                     // The conversation it was said in, so a bubble in a room can
                                     // open the specialist's own log when it is pressed.
                                     thread: event["thread_id"].as_str().map(str::to_string),
@@ -629,7 +641,29 @@ fn thread_row(
             .to_string(),
         current == Some(id.as_str()),
     );
-    let title = thread["title"].as_str().unwrap_or("Conversation").to_string();
+    // A conversation that started a run is named by what the run is for, in the list as well as in
+    // its header: "A team run (id 6548ec1b-…)" is a database key wearing a sentence, and the same
+    // conversation must not have two names in two places. A member's own conversation keeps its
+    // task's title. A run started by a command has no conversation to name, which is why the
+    // thread's own title is the fallback rather than the rule.
+    let title = match thread["team"]["run"].as_str() {
+        Some(run) if thread["team"]["role"].as_str().is_none() => devd(cx)
+            .sync
+            .watch(&q::runs())
+            .list("")
+            .iter()
+            .find(|r| r["id"].as_str() == Some(run))
+            .and_then(|r| r["goal"].as_str())
+            .map(|goal| {
+                let short: String = goal.chars().take(48).collect();
+                if short.len() < goal.len() { format!("{short}…") } else { short }
+            })
+            .unwrap_or_else(|| thread["title"].as_str().unwrap_or("Conversation").to_string()),
+        _ => thread["title"]
+            .as_str()
+            .unwrap_or("Conversation")
+            .to_string(),
+    };
     ui::row(
         gpui::ElementId::Name(format!("thread.{id}").into()),
         current == Some(id.as_str()),
@@ -1112,16 +1146,25 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
             .into_any_element();
     };
     let events = data["events"].as_array().map(Vec::as_slice).unwrap_or(&[]);
-    // A conversation that belongs to a team run is the room for the whole run: the person's
-    // messages, the planner's and every specialist's, in one transcript. The per-agent
-    // conversations still exist; this is the view that shows them talking to each other.
+    // The conversation a run was started from is the **room**: the person's messages, the
+    // planner's and every specialist's, in one transcript. A specialist's own conversation is
+    // still that specialist's: it keeps its task, its branch and its own turns, and points back at
+    // the room. Reading Backend's chat and being shown what Implementer said is not a room, it is a
+    // wrong answer to "what did Backend do".
     let room = run_of(shell, id, cx);
     let seat = room.as_ref().map(|_| devd(cx).sync.watch(&q::team_log(id)));
-    let room_events: Vec<Value> = seat
-        .as_ref()
-        .and_then(|s| s.data.as_ref())
-        .and_then(|d| d["events"].as_array().cloned())
-        .unwrap_or_default();
+    let room_data = seat.as_ref().and_then(|s| s.data.as_deref());
+    let origin = room_data
+        .and_then(|d| d["origin"].as_str())
+        .map(str::to_string);
+    let in_room = origin.as_deref() == Some(id);
+    let room_events: Vec<Value> = if in_room {
+        room_data
+            .and_then(|d| d["events"].as_array().cloned())
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     let events: &[Value] = if room_events.is_empty() { events } else { &room_events };
     let pending: Vec<&str> = data["pending"]
         .as_array()
@@ -1172,11 +1215,16 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
         thread["project"].as_str().map(std::path::PathBuf::from);
     let project = thread["project"].as_str().map(project_name);
     // A room is the run, so it is titled with what the run is for rather than with the id it was
-    // given: a person reading the conversation should see the goal, not a database key.
-    let room_data = room
-        .as_deref()
-        .and_then(|run| devd(cx).sync.watch(&q::run(run)).data.clone());
-    let title = match room_data
+    // given: a person reading the conversation should see the goal, not a database key. A
+    // specialist's conversation keeps its own title — its task — because that is what it is.
+    let run_data = if in_room {
+        room
+            .as_deref()
+            .and_then(|run| devd(cx).sync.watch(&q::run(run)).data.clone())
+    } else {
+        None
+    };
+    let title = match run_data
         .as_ref()
         .and_then(|d| d["run"]["goal"].as_str())
         .map(str::to_string)
@@ -1198,8 +1246,9 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
         facts.push(project);
     }
     // Who is in the room and where the work stands: the roster is what makes a run a team rather
-    // than a queue, and it belongs beside the goal it is working toward.
-    if let Some(data) = room_data.as_ref() {
+    // than a queue, and it belongs beside the goal it is working toward. In a member's own
+    // conversation the useful facts are the task and its branch, which are already here.
+    if let Some(data) = run_data.as_ref() {
         let mut roles: Vec<String> = data["tasks"]
             .as_array()
             .map(Vec::as_slice)
@@ -1425,6 +1474,30 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
                         .text_color(t.text)
                         .child(ui::Clip::new(title.clone())),
                 )
+                // A member's own conversation is not the room, but the room is one press away: a
+                // specialist's log is where its work happened, and the conversation it belongs to is
+                // where the team talked about it.
+                .children(origin.as_deref().filter(|_| !in_room).map(|org| {
+                    let (target, hover) = (org.to_string(), t.hover);
+                    div()
+                        .id("conversation.room")
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .gap(px(4.0))
+                        .px(px(7.0))
+                        .py(px(2.0))
+                        .rounded(px(size::RADIUS))
+                        .cursor_pointer()
+                        .text_size(px(size::TEXT_XS))
+                        .text_color(t.muted)
+                        .hover(move |s| s.bg(hover))
+                        .child("In the room")
+                        .child(icon("arrow-right", 11.0, t.faint))
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            this.go(Route::Assistant(Some(target.clone())), cx);
+                        }))
+                }))
                 // The branch, when this conversation works on one of its own: a quiet fact beside
                 // the title, the same weight as the pull request link under it.
                 .children(branch.map(|b| {
@@ -1539,7 +1612,7 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
         let content = match items.get(index) {
             Some(item) => draw(&key, index, item, resume_at == Some(index), cx),
             None => match &live {
-                Some(blocks) => devd_writes(&format!("{key}.live"), blocks, "", None, None, true, cx),
+                Some(blocks) => devd_writes(&format!("{key}.live"), blocks, "", TurnStyle::default(), true, cx),
                 None => div().into_any_element(),
             },
         };
@@ -1611,7 +1684,7 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
                 .child(composer(
                     shell,
                     if running {
-                        "A message now is read at its next step"
+                        "A message sent now is read at its next step"
                     } else {
                         "Enter sends · Shift+Enter adds a line"
                     },
@@ -1693,12 +1766,20 @@ fn activity_line(doing: String, glimpse: Option<String>, since: Option<chrono::D
         .overflow_hidden()
         .text_size(px(size::TEXT_SM))
         .child(div().flex_none().child(ui::motion::spinner("thread.spinner", t.accent)))
-        .child(div().flex_none().max_w(px(520.0)).overflow_hidden().whitespace_nowrap().text_color(t.muted).child(doing))
-        .children(took.map(|took| div().flex_none().font_family(mono()).text_size(px(size::TEXT_XS)).text_color(t.faint).child(took)))
-        .children(glimpse.map(|g| {
+        // What is running wraps: the line saying what is taking seven minutes must be readable, and
+        // a test name is long.
+        .child(
             div()
                 .flex_1()
                 .min_w_0()
+                .text_color(t.muted)
+                .child(doing),
+        )
+        .children(took.map(|took| div().flex_none().font_family(mono()).text_size(px(size::TEXT_XS)).text_color(t.faint).child(took)))
+        .children(glimpse.map(|g| {
+            div()
+                .flex_none()
+                .max_w(px(280.0))
                 .overflow_hidden()
                 .whitespace_nowrap()
                 .italic()
@@ -1792,15 +1873,19 @@ fn draw(thread: &str, index: usize, item: &Item, resume: bool, cx: &App) -> AnyE
             blocks,
             model,
             role,
+            bubble,
             thread: said_in,
         } => devd_writes(
             &format!("{thread}.{index}"),
             blocks,
             model,
-            role.as_deref(),
-            // A teammate's bubble in a room is a door: pressing it opens the conversation that
-            // message came from, so the detail is one press away instead of a search in the list.
-            said_in.as_deref().filter(|said_in| *said_in != thread),
+            TurnStyle {
+                role: role.as_deref(),
+                bubble: *bubble,
+                // A teammate's bubble in a room is a door: pressing it opens the conversation that
+                // message came from, so the detail is one press away instead of a search in the list.
+                open: said_in.as_deref().filter(|said_in| *said_in != thread),
+            },
             false,
             cx,
         ),
@@ -1909,10 +1994,12 @@ fn draw(thread: &str, index: usize, item: &Item, resume: bool, cx: &App) -> AnyE
                 Phase::Done => icon(glyph, 13.0, t.faint).into_any_element(),
                 Phase::Failed => icon("x", 13.0, t.danger).into_any_element(),
             };
-            // What was done reads as prose; what it was done to is the code.
+            // What was done reads as prose; what it was done to is the code. A step that failed
+            // wraps, because its reason is the whole point of the line: a message cut at the
+            // column's edge is a message that cannot be acted on.
             let mut line = div()
                 .flex()
-                .items_center()
+                .items_start()
                 .gap(px(8.0))
                 .pl(px(2.0))
                 .text_size(px(size::TEXT))
@@ -1922,6 +2009,7 @@ fn draw(thread: &str, index: usize, item: &Item, resume: bool, cx: &App) -> AnyE
                         .flex()
                         .flex_none()
                         .justify_center()
+                        .mt(px(2.0))
                         .child(mark),
                 )
                 .child(
@@ -1975,7 +2063,7 @@ fn draw(thread: &str, index: usize, item: &Item, resume: bool, cx: &App) -> AnyE
                         .min_w_0()
                         .text_size(px(size::TEXT_SM))
                         .text_color(t.faint)
-                        .child(ui::Clip::new(detail.clone())),
+                        .child(detail.clone()),
                 );
             }
             if let Some(took) = waiting.filter(|s| *s >= 15) {
@@ -2140,15 +2228,24 @@ fn role_tone(role: &str) -> Tone {
     }
 }
 
+/// How a turn is drawn: who said it (when it opens a speaker's run of messages), whether it is a
+/// member's bubble rather than the assistant's own voice, and where pressing the name leads.
+#[derive(Default, Clone, Copy)]
+struct TurnStyle<'a> {
+    role: Option<&'a str>,
+    bubble: bool,
+    open: Option<&'a str>,
+}
+
 fn devd_writes(
     id: &str,
     blocks: &[Block],
     model: &str,
-    role: Option<&str>,
-    open: Option<&str>,
+    style: TurnStyle<'_>,
     live: bool,
     cx: &App,
 ) -> AnyElement {
+    let TurnStyle { role, bubble, open } = style;
     let t = theme(cx);
     let mut column = div()
         .flex()
@@ -2220,7 +2317,7 @@ fn devd_writes(
     }
     // A teammate's turn is a bubble, not a wall: the card is what makes a room read as a room.
     // The assistant's own turns stay flat, because they are the conversation's own voice.
-    if role.is_some() {
+    if bubble {
         column = column
             .p(px(12.0))
             .rounded(px(size::RADIUS_L))
@@ -2368,7 +2465,7 @@ mod tests {
         let items = fold(&events, &[], false);
         // The assistant's own turn keeps no role: it is the room's voice, not a member of it.
         assert!(
-            matches!(&items[1], Item::Devd { role: Some(role), .. } if role == "backend"),
+            matches!(&items[1], Item::Devd { role: Some(role), bubble: true, .. } if role == "backend"),
             "{items:?}"
         );
         assert!(
@@ -2376,7 +2473,44 @@ mod tests {
                 if from == "backend" && to == "reviewer" && about == "scheduler"),
             "{items:?}"
         );
-        assert!(matches!(&items[3], Item::Devd { role: None, .. }), "{items:?}");
+        assert!(matches!(&items[3], Item::Devd { role: None, bubble: false, .. }), "{items:?}");
+    }
+
+    /// A member who says three things in a row is one voice in the room, not three: the heading is
+    /// stated once and the rest are its bubbles.
+    #[test]
+    fn consecutive_messages_from_one_member_share_one_heading() {
+        let said = |role: &str, text: &str| {
+            json!({
+                "kind": "assistant",
+                "role": role,
+                "data": { "model": "deepseek-flash", "content": [{ "type": "text", "text": text }] }
+            })
+        };
+        let items = fold(
+            &[
+                said("implementer", "The host is Windows."),
+                // A tool line between two messages does not change who is talking.
+                json!({ "kind": "tool_result", "data": { "tool_use_id": "t1", "content": "ok" } }),
+                said("implementer", "Committing the code first."),
+                said("reviewer", "Looks right."),
+                said("implementer", "Final checks."),
+            ],
+            &[],
+            false,
+        );
+        let headings: Vec<Option<&str>> = items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Devd { role, bubble: true, .. } => Some(role.as_deref()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            headings,
+            vec![Some("implementer"), None, Some("reviewer"), Some("implementer")],
+            "one heading per speaker run: {items:?}"
+        );
     }
 
     #[test]

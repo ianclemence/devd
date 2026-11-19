@@ -4641,7 +4641,11 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
                         json!({ "run": Value::Null, "origin": a.thread, "roles": {}, "events": events }),
                     ));
                 };
-                let origin = ctx.store.run_thread(&run_id)?.unwrap_or_else(|| a.thread.clone());
+                // The conversation the run was started from, or nothing when it was started by a
+                // command with no conversation (a schedule, `devd call team.start`). Pretending the
+                // thread being asked is the origin made every specialist look like the room: its
+                // title became the run's goal and its transcript everybody's messages.
+                let origin = ctx.store.run_thread(&run_id)?;
                 let threads = ctx.store.threads_of_run(&run_id)?;
                 let mut roles = serde_json::Map::new();
                 let mut events: Vec<Value> = Vec::new();
@@ -4655,7 +4659,7 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
                     for e in ctx.store.tail_events(thread, per)? {
                         let mut v = serde_json::to_value(&e).unwrap_or(Value::Null);
                         v["role"] = json!(role);
-                        v["origin"] = json!(thread == &origin);
+                        v["origin"] = json!(origin.as_deref() == Some(thread.as_str()));
                         events.push(v);
                     }
                 }
