@@ -644,15 +644,27 @@ fn thread_row(
     // A conversation that started a run is named by what the run is for, in the list as well as in
     // its header: "A team run (id 6548ec1b-…)" is a database key wearing a sentence, and the same
     // conversation must not have two names in two places. A member's own conversation keeps its
-    // task's title. A run started by a command has no conversation to name, which is why the
-    // thread's own title is the fallback rather than the rule.
-    let title = match thread["team"]["run"].as_str() {
-        Some(run) if thread["team"]["role"].as_str().is_none() => devd(cx)
+    // task's title. The run is found the same two ways `run_of` finds it, because a room's own row
+    // does not always carry which run it belongs to.
+    let run_here = thread["team"]["run"]
+        .as_str()
+        .map(str::to_string)
+        .or_else(|| {
+            devd(cx)
+                .sync
+                .watch(&q::runs())
+                .list("")
+                .iter()
+                .find(|r| r["thread_id"].as_str() == Some(id.as_str()))
+                .and_then(|r| r["id"].as_str().map(str::to_string))
+        });
+    let title = match (run_here, thread["team"]["role"].as_str()) {
+        (Some(run), None) => devd(cx)
             .sync
             .watch(&q::runs())
             .list("")
             .iter()
-            .find(|r| r["id"].as_str() == Some(run))
+            .find(|r| r["id"].as_str() == Some(run.as_str()))
             .and_then(|r| r["goal"].as_str())
             .map(|goal| {
                 let short: String = goal.chars().take(48).collect();

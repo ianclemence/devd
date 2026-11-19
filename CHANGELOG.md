@@ -10,6 +10,18 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.39.2] - 2026-11-20 - The room's name, in the list
+
+### Fixed
+
+- **A conversation that started a run is named by the run's goal in the sidebar**,
+  not only in its header. 0.39.1 changed the header and the list still said
+  "A team run (id 6548ec1b-…)", because a room's own row does not always carry
+  which run it belongs to: the list now finds the run the same two ways the header
+  does.
+
+---
+
 ## [0.39.1] - 2026-11-20 - The room, corrected
 
 0.39.0 made a run one conversation. Reading it back from a real run found the
