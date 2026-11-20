@@ -747,6 +747,8 @@ pub struct Team {
     /// Runs that have spent the one automatic extension they are given when they reach a ceiling
     /// while still working, so a second ceiling stops and asks a person.
     extended: Mutex<HashSet<String>>,
+    /// Tasks already told they have read enough, so the word is said once.
+    read_enough: Mutex<HashSet<String>>,
 }
 
 fn is_done(state: &str) -> bool {
@@ -877,6 +879,7 @@ impl Team {
             wrapped: Mutex::new(HashSet::new()),
             warned: Mutex::new(HashSet::new()),
             extended: Mutex::new(HashSet::new()),
+            read_enough: Mutex::new(HashSet::new()),
         })
     }
 
@@ -1198,6 +1201,29 @@ impl Team {
             let Ok(Some(thread)) = self.ctx.store.get_thread(tid) else {
                 continue;
             };
+            // Before the wrap-up, the cheaper word: a task that has read a great deal is usually
+            // re-reading rather than learning, and every turn carries all of it again.
+            if thread.input_tokens >= crate::budget::TASK_READ_ENOUGH_TOKENS
+                && !crate::budget::task_over(thread.input_tokens, thread.output_tokens)
+            {
+                let first = self
+                    .read_enough
+                    .lock()
+                    .map(|mut w| w.insert(t.id.clone()))
+                    .unwrap_or(false);
+                if first {
+                    let _ = self
+                        .hub
+                        .follow_up(tid, &crate::budget::read_enough_message(thread.input_tokens));
+                    self.event(
+                        &t.run_id,
+                        Some(&t.id),
+                        "read_enough",
+                        json!({ "task": t.key, "input_tokens": thread.input_tokens }),
+                    );
+                }
+                continue;
+            }
             if !crate::budget::task_over(thread.input_tokens, thread.output_tokens) {
                 continue;
             }
