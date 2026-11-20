@@ -10,6 +10,27 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.39.8] - 2026-11-20 - A bill is not a failure
+
+A run stopped because the provider answered `402 Insufficient Balance` three times. The task was
+marked failed, the run paused, and finishing it took a person noticing a top-up, restarting the
+daemon and retrying the task by hand.
+
+### Fixed
+
+- **An account without credit is a bill, not a failed task.** A billing refusal is recognised by
+  its own words (`out of credit`, `insufficient balance`, `HTTP 402`, `needs billing`, quota) and
+  the task goes back to `pending` with **no attempt spent**, held for a minute so the scheduler is
+  not a request storm against an account that cannot answer. The run records `needs_credit` with
+  the reason and the interval, and tells the requester the work is kept. When the balance returns,
+  the next start works and the run finishes by itself.
+
+The distinction is who can fix it: a network is retried by devd, a work failure by the agent inside
+its task, and a bill by a person - but the retry stays automatic, so nobody has to come back and
+press a button.
+
+---
+
 ## [0.39.7] - 2026-11-20 - What the third project taught
 
 A durable job queue was built by the team while it was being watched, and the watching found
