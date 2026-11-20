@@ -37,7 +37,7 @@ pub fn validate(schema: &Value, args: &Value) -> Result<()> {
         // list of names. The example is built from the schema itself, so it can
         // never advertise a field the capability does not accept.
         let sample = example(schema);
-        let hint = if errors.iter().any(|e| e.contains("required")) {
+        let mut hint = if errors.iter().any(|e| e.contains("required")) {
             format!(
                 "; example: {}",
                 serde_json::to_string(&sample)
@@ -49,6 +49,17 @@ pub fn validate(schema: &Value, args: &Value) -> Result<()> {
         } else {
             String::new()
         };
+        // A field the capability does not take is usually a near-miss of one it does. Naming the
+        // ones it accepts turns "is not a known argument" into something a person can act on.
+        if errors.iter().any(|e| e.contains("not a known argument")) {
+            if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
+                let mut names: Vec<&str> = properties.keys().map(String::as_str).collect();
+                names.sort_unstable();
+                if !names.is_empty() {
+                    hint.push_str(&format!("; it takes: {}", names.join(", ")));
+                }
+            }
+        }
         Err(DevdError::invalid(format!(
             "arguments do not match the capability schema: {}{hint}",
             errors.join("; ")
@@ -409,6 +420,19 @@ mod tests {
         )
         .unwrap();
         validate(&schema(), &json!({ "path": "C:/x", "mode": "safe" })).unwrap();
+    }
+
+    /// The near-miss a person actually types: `turns` for `max_turns` was accepted silently once,
+    /// so "Budget set" was shown for a call that removed the ceiling instead of setting one.
+    #[test]
+    fn a_field_the_capability_does_not_take_is_refused_and_the_ones_it_does_are_named() {
+        let e = validate(&schema(), &json!({ "path": "C:/x", "turnz": 320 })).unwrap_err();
+        let said = e.to_string();
+        assert!(said.contains("not a known argument"), "{said}");
+        assert!(said.contains("it takes:"), "{said}");
+        for name in ["path", "recursive", "mode", "limit"] {
+            assert!(said.contains(name), "{name} not named in: {said}");
+        }
     }
 
     #[test]

@@ -2181,7 +2181,17 @@ impl Hub {
             if !input["args"].is_object() {
                 input["args"] = json!({});
             }
-            input["args"]["task"] = json!(task.id);
+            // The task is supplied by the harness, never by the model — but only where the
+            // capability declares it: a capability that takes no task would refuse the call for an
+            // argument it never asked for, which reads to the model as a bug in its own call.
+            let declares_task = cap
+                .args_schema
+                .get("properties")
+                .and_then(|p| p.as_object())
+                .is_some_and(|p| p.contains_key("task"));
+            if declares_task {
+                input["args"]["task"] = json!(task.id);
+            }
         }
         if role.id != "planner" {
             if let Some(work) = &task.workdir {
