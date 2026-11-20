@@ -155,6 +155,38 @@ impl RunKind {
     }
 }
 
+/// Whether a message is the shape of a project rather than a question.
+///
+/// This starts nothing. It is the evidence for *offering* a run: "Build a hello-world Wikipedia
+/// clone" is a project, and it used to fall into a conversation with no plan, no worktree and no
+/// verdict - one real one reached 7.25 million input tokens in a single context and never
+/// compiled. A question ("why does cargo link with rust-lld on Windows?") stays a conversation.
+///
+/// It is deliberately a question and not a decision, because a wrong guess here spends a person's
+/// money on branches they did not ask for.
+pub fn suggests_team(message: &str) -> bool {
+    let t = message.trim();
+    if t.is_empty() {
+        return false;
+    }
+    // Only the opening counts: "build" later in a sentence is usually describing something.
+    let opening = t.split(['.', '\n']).next().unwrap_or(t).trim().to_ascii_lowercase();
+    const VERBS: &[&str] = &[
+        "build ", "create ", "implement ", "develop ", "make ", "write ", "clone ", "scaffold ",
+        "port ", "rewrite ", "design and build ",
+    ];
+    if !VERBS.iter().any(|v| opening.starts_with(v)) {
+        return false;
+    }
+    let whole = t.to_ascii_lowercase();
+    const THINGS: &[&str] = &[
+        "app", "site", "website", "web app", "api", "service", "server", "clone", "dashboard",
+        "cli", "engine", "pipeline", "system", "platform", "tool", "game", "bot", "scheduler",
+        "tracker", "store", "marketplace", "editor",
+    ];
+    THINGS.iter().any(|thing| whole.contains(thing))
+}
+
 /// What a person's words ask for: the filter in front of every model call.
 ///
 /// This is deliberately small and boring. It recognises the two things a person
@@ -1797,6 +1829,31 @@ mod tests {
     fn a_plain_message_is_answered_by_one_conversation() {
         for text in ["why is the build failing?", "add a README", "", "what does this function do"] {
             assert_eq!(classify(text, None), RunKind::Answer, "{text:?}");
+        }
+    }
+
+    /// The two cases a person actually tried, and the line between them.
+    #[test]
+    fn a_project_is_offered_a_run_and_a_question_is_not() {
+        for project in [
+            "Build a hello world Wikipedia clone site in Next.js",
+            "build \"Kata\": a Rust app that removes photo backgrounds on-device",
+            "Create an API for tracking expenses, with tests",
+            "implement a CLI that syncs notes to a local store",
+        ] {
+            assert!(suggests_team(project), "a project: {project:?}");
+            // ...and none of them start anything by being classified: they are still answered
+            // unless the person accepts the offer.
+            assert_eq!(classify(project, None), RunKind::Answer, "{project:?}");
+        }
+        for question in [
+            "why does cargo link with rust-lld on Windows?",
+            "what is a run in devd, and how is it different from a conversation?",
+            "How do I make my tests faster?",
+            "Explain how the scheduler decides when a task starts.",
+            "the site is slow, where should I look?",
+        ] {
+            assert!(!suggests_team(question), "not a project: {question:?}");
         }
     }
 
