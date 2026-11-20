@@ -2619,12 +2619,14 @@ impl Team {
     /// Whether this task works in its own copy of the project.
     fn will_isolate(&self, run: &TeamRun, t: &TeamTask, tasks: &[TeamTask]) -> bool {
         let role = roles::get(&t.role).expect("validated");
-        // A member that may not write by role can still be given files to write: a QA task that
-        // owns a test file is exactly that. It needs its own copy for the same reason a writer
-        // does, because its edits sit in the project's tree until someone commits them, and a
-        // merge into a tree with someone else's unfinished work in it is refused — which blocked
-        // another member's finished task in a real run.
-        if !(role.isolated || !t.scope.is_empty()) || run.parallel < 2 {
+        // Anything that can leave files in the project's tree needs its own copy. The scope is one
+        // signal, but a QA task given no scope at all still writes tests — one did, straight into
+        // the shared tree, which is the same bug this check was meant to close: its edits sit in the
+        // tree until someone commits them, and a merge into that tree is refused. A verification
+        // task is the exception: it reads the merged result, which is the whole point of it.
+        let verification = t.key == "final-verify" || t.key == "acceptance" || t.key.ends_with("-verify");
+        let leaves_files = role.writes || !t.scope.is_empty() || (role.id == "qa" && !verification);
+        if !(role.isolated || leaves_files) || run.parallel < 2 {
             return false;
         }
         let Some(project) = run.project.as_deref().map(Path::new) else {
