@@ -10,6 +10,16 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.39.6] - 2026-11-20 - A review is not the work it reviews
+
+A request opening with review, re-review, audit, inspect or assess now asks for a judgement: no
+change and no verification, because that is what a reviewer's proof is. Before, the word "change"
+inside a review's title made the classifier demand a passing check from a role whose entire job is
+to read the diff and say what it found. A request that opens with the change itself still demands
+both.
+
+---
+
 ## [0.39.5] - 2026-11-20 - Coherence
 
 The seams between subsystems, where each part held a piece of the truth.
