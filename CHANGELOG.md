@@ -10,6 +10,28 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.39.5] - 2026-11-20 - Coherence
+
+The seams between subsystems, where each part held a piece of the truth.
+
+### Fixed
+
+- **A capability takes exactly the arguments it declares.** `turns` where the capability wanted
+  `max_turns` was accepted silently: the answer said "Budget set" and the ceiling had been
+  removed. Every capability now closes its schema, and the refusal names the arguments it takes.
+- **A network failure no longer uses up a task's attempts.** Three provider stops in a row marked
+  a nearly finished task failed and paused its run. Provider failures are retried under their own
+  budget, eight deep, without touching the task's three.
+- **The release is gated on the tests.** `crates/devd-cli/tests/version.rs` had been failing since
+  0.38.0 — `tauri.conf.json` said 0.38.0 while the workspace said 0.39.4 — because the release
+  workflow only built and `ci.yml` does not run on feature branches. The release now has a test
+  job that windows, macos and linux all need, and the desktop version is current.
+- **A package.json is evidence, not a weak guess.** A plain Node project — manifest, scripts that
+  run node, ES modules — was reported as "only weak evidence for Node.js"; the manifest's own
+  contents now count towards the score.
+
+---
+
 ## [0.39.4] - 2026-11-20 - What a real run found
 
 A team run on a fresh project (`pulse`, a small Node status board) was followed from the
