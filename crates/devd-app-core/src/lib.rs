@@ -27,7 +27,6 @@ pub mod command;
 pub mod diff;
 pub mod flow;
 pub mod fuzzy;
-pub mod glimpse;
 pub mod links;
 pub mod markdown;
 pub mod motion;

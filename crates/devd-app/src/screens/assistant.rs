@@ -1576,9 +1576,15 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
     let items = shell.transcript.items.clone();
     // What the status line says devd is doing: thinking, writing, or the step that is running.
     let is_writing = writing.as_deref().is_some_and(|w| !w.trim().is_empty());
-    let (doing, glimpse) = match (&thinking, is_writing) {
-        (Some((_, tail)), false) => ("Thinking".to_string(), Some(tail.clone())),
-        (_, true) => ("Writing".to_string(), None),
+    // The thought itself is never put in the status line. It is there for the person to open, and
+    // until they do the line says only that the model is thinking.
+    let thought = match (&thinking, is_writing) {
+        (Some((_, text)), false) if !text.trim().is_empty() => Some(text.clone()),
+        _ => None,
+    };
+    let doing = match (&thinking, is_writing) {
+        (Some(_), false) => "Thinking".to_string(),
+        (_, true) => "Writing".to_string(),
         // What is being done right now, said as the step's own row would say it: "Reading a.rs", "Running cargo test".
         _ => {
             let step = items.iter().rev().find_map(|i| match i {
@@ -1588,7 +1594,7 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
                 }
                 _ => None,
             });
-            (step.unwrap_or_else(|| "Working".to_string()), None)
+            step.unwrap_or_else(|| "Working".to_string())
         }
     };
     // The step that is running is this line; its own row in the transcript would say the same thing twice.
@@ -1710,8 +1716,42 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
                 .pt(px(8.0))
                 .children(stopped)
                 .children(waiting_rows(id, &data, cx))
-                .children(running.then(|| activity_line(doing.clone(), glimpse.clone(), turn_began, cx)))
-                .child(composer(
+                .children(running.then(|| {
+                    // The reasoning sits behind a click, not in the line: "Thinking" says the model
+                    // is working, and opening it shows the process - the way the assistants people
+                    // already use do it. Nothing of the thought is shown until they ask.
+                    let t = theme(cx);
+                    let open = cx.global::<crate::state::Devd>().thinking_open.contains(id);
+                    let mut column = div().w_full().max_w(px(size::READING)).mx_auto().flex_col();
+                    if let Some(text) = thought.clone() {
+                        let key = id.to_string();
+                        let head = Button::new("thread.thinking", "Thinking")
+                            .kind(ButtonKind::Ghost)
+                            .icon(if open { "chevron-down" } else { "chevron-right" })
+                            .on_click(move |_, _, cx| {
+                                let devd = cx.global_mut::<crate::state::Devd>();
+                                if !devd.thinking_open.remove(&key) {
+                                    devd.thinking_open.insert(key.clone());
+                                }
+                                cx.refresh_windows();
+                            });
+                        column = column.child(div().pb(px(6.0)).child(head));
+                        if open {
+                            column = column.child(
+                                div()
+                                    .id(ui::nid("thinking.body", 0))
+                                    .max_h(px(220.0))
+                                    .overflow_y_scroll()
+                                    .pb(px(8.0))
+                                    .text_size(px(size::TEXT_SM))
+                                    .line_height(px(19.0))
+                                    .text_color(t.faint)
+                                    .child(text),
+                            );
+                        }
+                    }
+                    column.child(activity_line(doing.clone(), turn_began, cx))
+                }))                .child(composer(
                     shell,
                     if running {
                         "A message sent now is read at its next step"
@@ -1766,25 +1806,12 @@ fn forget_running(thread: &str, index: usize) -> Option<u64> {
 }
 
 /// While devd works: what it is doing now, and how long since the person last spoke. It sits at the foot of
-/// the reply, above the message box, for the whole turn: a step running ("Running go test"), the model thinking
-/// (with the latest of its thought, faint), or the words being written. Nothing about a long turn should look
-/// like a hang.
-fn activity_line(doing: String, glimpse: Option<String>, since: Option<chrono::DateTime<chrono::Utc>>, cx: &App) -> AnyElement {
+/// the reply, above the message box, for the whole turn: a step running ("Running go test"), the model
+/// thinking, or the words being written. The thought itself is not here - it is behind the "Thinking"
+/// control above this line - because reasoning read as it streams is noise, not progress.
+fn activity_line(doing: String, since: Option<chrono::DateTime<chrono::Utc>>, cx: &App) -> AnyElement {
     let t = theme(cx);
     let took = since.map(|at| took((chrono::Utc::now() - at).num_seconds().max(0) as u64));
-    // The label and the time keep their width; the glimpse of thought takes only what is left, and is cut at the
-    // row's edge. It is the latest few words, so the end of the thought is what shows.
-    let glimpse = glimpse.map(|g| {
-        let words: Vec<&str> = g.split_whitespace().collect();
-        let mut tail = String::new();
-        for word in words.iter().rev() {
-            if tail.chars().count() + word.chars().count() > 110 {
-                break;
-            }
-            tail = if tail.is_empty() { word.to_string() } else { format!("{word} {tail}") };
-        }
-        format!("…{tail}")
-    });
     div()
         .w_full()
         .max_w(px(size::READING))
@@ -1806,16 +1833,7 @@ fn activity_line(doing: String, glimpse: Option<String>, since: Option<chrono::D
                 .child(doing),
         )
         .children(took.map(|took| div().flex_none().font_family(mono()).text_size(px(size::TEXT_XS)).text_color(t.faint).child(took)))
-        .children(glimpse.map(|g| {
-            div()
-                .flex_none()
-                .max_w(px(280.0))
-                .overflow_hidden()
-                .whitespace_nowrap()
-                .italic()
-                .text_color(t.faint)
-                .child(g)
-        }))
+
         .into_any_element()
 }
 
