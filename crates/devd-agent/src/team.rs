@@ -2309,6 +2309,42 @@ impl Team {
         Ok(true)
     }
 
+    /// A task that could not merge because the project's tree had someone else's unfinished work in
+    /// it is not a failed task: it is a task that arrived too early. Once the tree is clean and
+    /// nothing else in the run is writing, it is put back to work by itself, so a person does not
+    /// have to notice and press retry for work that is already finished.
+    fn unstick_merge_blocked(self: &Arc<Self>, run: &TeamRun, tasks: &[TeamTask]) {
+        let Some(project) = run.project.as_deref().map(Path::new) else {
+            return;
+        };
+        if !project.join(".git").exists() {
+            return;
+        }
+        let blocked: Vec<&TeamTask> = tasks
+            .iter()
+            .filter(|t| {
+                t.state == "blocked"
+                    && t.failure_kind.as_deref() == Some("merge")
+                    && t.attempts < 3
+            })
+            .collect();
+        if blocked.is_empty() || tasks.iter().any(|t| is_active(&t.state)) {
+            return;
+        }
+        let Ok(status) = self.git_run(project, &["status", "--porcelain"]) else {
+            return;
+        };
+        if !status.ok() || !status.stdout.trim().is_empty() {
+            return;
+        }
+        for t in blocked {
+            let note = "The project's tree is clean now, so the merge that was refused can go ahead.";
+            if let Err(why) = self.retry(&self.ctx, &t.id, Some(note)) {
+                self.event(&run.id, Some(&t.id), "retry_failed", json!({ "task": t.key, "why": why.to_string() }));
+            }
+        }
+    }
+
     fn tick(self: &Arc<Self>, run: &TeamRun) -> Result<bool> {
         let tasks = self.ctx.store.list_tasks_of_run(&run.id)?;
         // What is alive but not progressing is found before the scheduler decides
@@ -2319,6 +2355,7 @@ impl Team {
             return Ok(true);
         }
         self.wrap_up_long_tasks(&tasks);
+        self.unstick_merge_blocked(run, &tasks);
         for t in tasks.iter().filter(|t| is_active(&t.state)) {
             if let Some(project) = &run.project {
                 if roles::get(&t.role).map(|r| r.writes).unwrap_or(false) && t.branch.is_none() {
