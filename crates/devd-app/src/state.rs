@@ -501,11 +501,7 @@ fn apply(signal: Signal, cx: &mut App) {
                     // that the model is working, not as something to read back.
                     if let Some(piece) = data["thinking"].as_str() {
                         let (_, tail) = state.thinking.entry(thread.clone()).or_insert_with(|| (Instant::now(), String::new()));
-                        tail.push_str(piece);
-                        let keep = tail.char_indices().rev().nth(280).map(|(i, _)| i).unwrap_or(0);
-                        if keep > 0 {
-                            tail.drain(..keep);
-                        }
+                        *tail = devd_app_core::glimpse::of(tail, piece);
                     }
                     if data["text"].as_str().is_some_and(|t| !t.is_empty()) {
                         state.thinking.remove(&thread);
