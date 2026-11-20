@@ -582,6 +582,43 @@ impl Hub {
         })
     }
 
+    /// A message a one-shot command recorded, which nothing was left to answer.
+    ///
+    /// `devd call chat.send` runs in its own process: it writes the person's message and the run,
+    /// then exits. The process that owns the agents was already going, so it never saw the
+    /// conversation start, and the thread sat at `running` with nobody driving it — while the
+    /// command had said "the agent is working". A conversation whose state says running, which
+    /// this process is not running, and whose newest event is something the person said, is owed
+    /// an answer, so the host picks it up here instead of waiting for a restart.
+    pub fn pick_up_stranded(self: &Arc<Self>) -> usize {
+        let mut started = 0;
+        let Ok(threads) = self.ctx.store.list_threads(200) else {
+            return 0;
+        };
+        for t in threads.into_iter().filter(|t| t.state == "running") {
+            if self.is_running(&t.id) {
+                continue;
+            }
+            let Ok(events) = self.ctx.store.tail_events(&t.id, 1) else {
+                continue;
+            };
+            let Some(last) = events.last() else { continue };
+            // Only what the person said. devd's own reminders (a gate, a goal step, a drawing it
+            // sent back) are not a message waiting for an answer.
+            let from_person = last.kind == "user"
+                && last.data["gate"] != json!(true)
+                && last.data["goal"] != json!(true)
+                && last.data["drawing"] != json!(true);
+            if !from_person {
+                continue;
+            }
+            self.deliver_queued(&t.id).unwrap_or(0);
+            self.spawn(&t.id);
+            started += 1;
+        }
+        started
+    }
+
     /// Conversations that were running when devd last stopped are not. Only the
     /// process that owns the agents (see [`crate::host`]) may call this.
     pub fn reconcile(self: &Arc<Self>) {

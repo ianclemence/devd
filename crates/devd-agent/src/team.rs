@@ -2497,7 +2497,12 @@ impl Team {
     /// Whether this task works in its own copy of the project.
     fn will_isolate(&self, run: &TeamRun, t: &TeamTask, tasks: &[TeamTask]) -> bool {
         let role = roles::get(&t.role).expect("validated");
-        if !role.isolated || run.parallel < 2 {
+        // A member that may not write by role can still be given files to write: a QA task that
+        // owns a test file is exactly that. It needs its own copy for the same reason a writer
+        // does, because its edits sit in the project's tree until someone commits them, and a
+        // merge into a tree with someone else's unfinished work in it is refused — which blocked
+        // another member's finished task in a real run.
+        if !(role.isolated || !t.scope.is_empty()) || run.parallel < 2 {
             return false;
         }
         let Some(project) = run.project.as_deref().map(Path::new) else {

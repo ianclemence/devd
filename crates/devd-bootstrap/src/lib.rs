@@ -64,6 +64,15 @@ impl Agents {
             // it would like to be told about. Both only run here, because both
             // can start work.
             devd_agent::guardian::spawn(self.team.clone(), self.hub.clone());
+            // A one-shot command (`devd call chat.send`) records a message and exits, so the
+            // conversation it started has no process driving it. This process is the one that
+            // owns the agents, so it watches for those and answers them, rather than leaving the
+            // person waiting until devd is restarted.
+            let hub = self.hub.clone();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_secs(3));
+                hub.pick_up_stranded();
+            });
         }
     }
 }
