@@ -10,6 +10,32 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.39.7] - 2026-11-20 - What the third project taught
+
+A durable job queue was built by the team while it was being watched, and the watching found
+five more seams.
+
+### Fixed
+
+- **A working run extends its own ceiling once.** A run that reached its turn ceiling with
+  active tasks and no failed task paused and waited for a person to press raise. It now gets
+  half as many turns again (at least 40), recorded as `budget_extended`; the second ceiling
+  stops it as before, and the dollar ceiling is untouched.
+- **A task that has read enough is told to act.** One QA task reached 634,417 input tokens
+  writing two test files, most of it re-reading a tree it had already seen; the only guard
+  fired at 600k. At 200k a task is now told once, in words, to stop reading and spend what it
+  knows. The 600k wrap-up is unchanged and remains the hard stop.
+- **A QA task that writes tests gets its own copy, scope or no scope.** The isolation rule
+  keyed on the task's scope, and a planner that gives QA no scope does not stop QA writing
+  tests into the shared tree - which is the tree every merge lands on. QA is now treated as a
+  member that leaves files, except when the task is the run's own verification.
+- **A review of a change does not demand a change of its own.** A task opening with review,
+  re-review, audit, inspect or assess asks for a judgement: no change, no verification.
+- **Completion reasons name the work.** "page is still running" became the task's own title,
+  quoted, because a person reads those reasons.
+
+---
+
 ## [0.39.6] - 2026-11-20 - A review is not the work it reviews
 
 A request opening with review, re-review, audit, inspect or assess now asks for a judgement: no
