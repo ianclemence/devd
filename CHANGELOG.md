@@ -10,6 +10,21 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.39.9] - 2026-11-20 - The thought behind a click
+
+### Fixed
+
+- **Reasoning is no longer streamed into the status line.** It showed the last 280 characters of
+  the stream beside "Thinking" - beginning and ending mid-word, markdown and line breaks and all.
+  The line now says only "Thinking", and a "Thinking" control above it opens the whole thought for
+  the turn underneath, scrollable, and closes again when clicked. Nothing of it is shown until the
+  person asks, which is how the assistants people already use behave.
+- **A refused call reads as a sentence.** A capability with no phrase of its own produced "Could
+  not stacks: Describe" - a domain label where a verb belongs. It now reads "Could not run
+  stacks.describe", and stacks.describe, stacks.list and stacks.validate have phrases of their own.
+
+---
+
 ## [0.39.8] - 2026-11-20 - A bill is not a failure
 
 A run stopped because the provider answered `402 Insufficient Balance` three times. The task was
