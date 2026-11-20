@@ -50,6 +50,14 @@ const KNOWN: &[(&str, &str, &str, &str)] = &[
     ("fs.move", "Moving", "Moved", "file"),
     ("fs.delete", "Deleting", "Deleted", "file"),
     (
+        "stacks.describe",
+        "Reading the stack",
+        "Read the stack",
+        "lookup",
+    ),
+    ("stacks.list", "Listing the stacks", "Listed the stacks", "lookup"),
+    ("stacks.validate", "Checking the request", "Checked the request", "lookup"),
+    (
         "project.detect",
         "Reading the project",
         "Read the project",
@@ -500,8 +508,17 @@ pub fn describe(name: &str, input: &Value, phase: Phase) -> Described {
     let action = match phase {
         Phase::Running => running,
         Phase::Done => done,
-        // "Could not read", from "Reading": the plain verb is the one that reads right.
-        Phase::Failed => format!("Could not {}", infinitive(&running)),
+        // "Could not read", from "Reading": the plain verb is the one that reads right. A phrase
+        // that is only a domain label ("Stacks: Describe") has no verb to take that place, so the
+        // capability's own name is used instead — "Could not stacks: Describe" is not a sentence a
+        // person can act on, and it is what a refused call to an unlisted capability looked like.
+        Phase::Failed => {
+            if running.contains(": ") {
+                format!("Could not run {id}")
+            } else {
+                format!("Could not {}", infinitive(&running))
+            }
+        }
     };
     Described {
         action,
@@ -950,6 +967,24 @@ mod tests {
         assert_eq!(
             describe("tls.trust", &Value::Null, Phase::Done).action,
             "TLS: Trust"
+        );
+    }
+
+    /// A refused call to a capability with no phrase of its own used to read "Could not stacks:
+    /// Describe" — a domain label where a verb belongs, and no sentence to act on. Seen in the
+    /// window when a model called `stacks.describe` with `id` instead of `stack`.
+    #[test]
+    fn a_refused_call_to_an_unlisted_capability_reads_as_a_sentence() {
+        let refused = describe(
+            "stacks.describe.unknown",
+            &json!({ "id": "x" }),
+            Phase::Failed,
+        );
+        assert_eq!(refused.action, "Could not run stacks.describe.unknown");
+        // ...and the capabilities people actually reach read as themselves, because they are known.
+        assert_eq!(
+            describe("stacks.describe", &Value::Null, Phase::Failed).action,
+            "Could not read the stack"
         );
     }
 
