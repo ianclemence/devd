@@ -793,6 +793,19 @@ impl Store {
         })
     }
 
+    /// Add to a run's turn ceiling, keeping its dollar ceiling. Used by the one automatic extension
+    /// a working run is allowed when it reaches what it was given; a person's own ceiling is
+    /// untouched in spirit and one extension is all a run gets.
+    pub fn extend_run_budget(&self, run_id: &str, more_turns: i64) -> Result<()> {
+        self.with(|c| {
+            c.execute(
+                "UPDATE team_runs SET max_turns = COALESCE(max_turns, 0) + ?2 WHERE id=?1",
+                params![run_id, more_turns],
+            )?;
+            Ok(())
+        })
+    }
+
     /// Bound a run: the most it may spend and the most model turns its agents may take together. `None` leaves that unbounded.
     pub fn set_run_budget(
         &self,

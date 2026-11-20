@@ -744,6 +744,9 @@ pub struct Team {
     wrapped: Mutex<HashSet<String>>,
     /// Runs already told they are near a ceiling, so it is said once.
     warned: Mutex<HashSet<String>>,
+    /// Runs that have spent the one automatic extension they are given when they reach a ceiling
+    /// while still working, so a second ceiling stops and asks a person.
+    extended: Mutex<HashSet<String>>,
 }
 
 fn is_done(state: &str) -> bool {
@@ -873,6 +876,7 @@ impl Team {
             stop: Mutex::new(HashMap::new()),
             wrapped: Mutex::new(HashSet::new()),
             warned: Mutex::new(HashSet::new()),
+            extended: Mutex::new(HashSet::new()),
         })
     }
 
@@ -1139,6 +1143,35 @@ impl Team {
                 false
             }
             crate::budget::Standing::Reached(words) => {
+                // A run that is still moving gets one extension of its own, recorded, instead of
+                // stopping for a person. The ceiling bounds spending nobody asked for; it should
+                // not interrupt work that is plainly progressing, and a person asked to press
+                // "raise" mid-job is the harness asking to be babysat. Once per run: a second
+                // ceiling is a real answer, not another chance.
+                let first_extension = self
+                    .extended
+                    .lock()
+                    .map(|mut seen| seen.insert(run.id.clone()))
+                    .unwrap_or(false);
+                let tasks = self.ctx.store.list_tasks_of_run(&run.id).unwrap_or_default();
+                let moving = tasks.iter().any(|t| is_active(&t.state))
+                    && !tasks.iter().any(|t| t.state == "failed");
+                if first_extension && moving {
+                    let more = (usage.turns / 2).max(40);
+                    if self.ctx.store.extend_run_budget(&run.id, more).is_ok() {
+                        self.event(
+                            &run.id,
+                            None,
+                            "budget_extended",
+                            json!({ "words": words, "spent_usd": usage.cost_usd, "turns": usage.turns, "added_turns": more }),
+                        );
+                        self.say_in_requester(
+                            run,
+                            &format!("The run reached its ceiling ({words}) while it was still working, so devd gave it {more} more turns once. It will pause at the next ceiling; team.budget raises it."),
+                        );
+                        return false;
+                    }
+                }
                 let why = format!("{}: {words}. The work so far is kept. Raise the budget (team.budget) and resume to continue.", devd_core::runs::BUDGET_REACHED);
                 let _ = self
                     .ctx
