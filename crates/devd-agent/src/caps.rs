@@ -1271,6 +1271,13 @@ struct ResultArgs {
 const RESULT_PREVIEW: usize = 1600;
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+/// A message about to be sent, to ask how it would be handled before it is.
+pub struct SuggestModeArgs {
+    /// What the person has written so far.
+    text: String,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct UpdateThread {
     /// Conversation id.
     thread: String,
@@ -4510,6 +4517,24 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             let manifest: serde_json::Value = serde_json::from_str(include_str!("../../../docs/design-manifest.json"))
                 .unwrap_or(serde_json::Value::Null);
             Ok(Outcome::with_data("the interface contract", manifest))
+        },
+    )?;
+    reg.define::<SuggestModeArgs>("chat.suggest_mode", "Would this message be a run or an answer?")
+    .description("Asks how a message would be handled before it is sent: `kind` is what devd would do with it right now (answer or plan), and `suggest_team` is whether the words are the shape of a project - a whole app, site, service - which is the one case where a person should be offered a team run instead of silently getting a single agent. It starts nothing and spends nothing; a wrong guess here would spend a person's money on branches they did not ask for.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, a| simple("chat.suggest_mode", format!("suggest a mode for {} chars", a.text.chars().count())),
+        |_, a| {
+            let kind = devd_core::classify(&a.text, None);
+            let suggest_team = kind == devd_core::RunKind::Answer && devd_core::suggests_team(&a.text);
+            Ok(Outcome::with_data(
+                if suggest_team { "a team run would suit this" } else { "this reads as a conversation" },
+                json!({ "kind": kind.as_str(), "suggest_team": suggest_team }),
+            ))
         },
     )?;
     reg.define::<NoArgs>("chat.list", "List conversations")

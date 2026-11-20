@@ -17200,6 +17200,32 @@ var TERM_POLL_MS = 250;
       toast("info", "Saved. It will send when devd is back.");
       return;
     }
+    // A first message that reads like a whole project is offered a run rather than quietly
+    // becoming a single agent's conversation: one real project went that way at 7.25 million
+    // input tokens in one context, with no plan, no worktree and no verdict. The offer is a
+    // question, never a decision - devd asks chat.suggest_mode and the person answers.
+    if (!args.__offered && !args.thread && !args.kind && args.message) {
+      args.__offered = true;
+      run("chat.suggest_mode", { text: args.message }, { quiet: true }).then(function (o) {
+        var offered = o && o.data && o.data.suggest_team;
+        if (offered && window.confirm("This looks like a team job - start a run and let the planner propose a plan?")) {
+          run("team.start", { goal: args.message, project: AI.project || undefined }, { quiet: true }).then(function (r) {
+            var id = r && r.data && r.data.id;
+            toast("ok", (id ? "Run " + String(id).slice(0, 8) + " is planning" : "A run is planning") + ". The plan comes to you before any work starts.");
+          }).catch(function (e) {
+            toast("error", (e && e.message) || "the run could not start");
+          });
+          return;
+        }
+        delete args.__offered;
+        sendChat(args);
+      }).catch(function () {
+        delete args.__offered;
+        sendChat(args);
+      });
+      return;
+    }
+    delete args.__offered;
     run("chat.send", args, { quiet: true, rethrow: true }).then(function (o) {
       if (!o) return;
       outboxRemove(args.client_id);

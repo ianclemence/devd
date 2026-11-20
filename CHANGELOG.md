@@ -10,6 +10,28 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.40.0] - 2026-11-20 - A project is offered a run
+
+### Added
+
+- **`runs::suggests_team`**: whether a message is the *shape of a project* - it opens with
+  build/create/implement/develop/make/write/clone/scaffold/port/rewrite and names a thing (app,
+  site, api, service, clone, dashboard, cli, engine, pipeline, system, tool). It is the evidence
+  for offering a run, never for starting one: `classify` is unchanged, so nothing spends money on
+  a guess.
+- **`chat.suggest_mode`**: a read-only capability that answers `{kind, suggest_team}` for a message
+  before it is sent, so an interface can ask instead of deciding.
+- **The web composer offers it**: a first message that reads like a whole project asks *"This looks
+  like a team job - start a run and let the planner propose a plan?"* and starts one only if the
+  person says yes; otherwise it is sent as a conversation exactly as before.
+
+Why: a real project request ("Build "Kata" ... an app written in Rust") matched none of the
+"have the team ..." phrases, so it became a single conversation - 7.25 million input tokens in one
+context, no plan, no worktree, no verdict. The same project as a run finished with 8 tasks, 84
+passing tests and a reviewer's approve.
+
+---
+
 ## [0.39.9] - 2026-11-20 - The thought behind a click
 
 ### Fixed
