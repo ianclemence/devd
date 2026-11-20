@@ -89,6 +89,7 @@ pub fn fold(events: &[Value], pending: &[&str], running: bool) -> Vec<Item> {
     let mut turn: (u64, f64, u64) = (0, 0.0, 0);
     for event in events {
         let data = &event["data"];
+        let data_event_id = event["id"].as_i64().unwrap_or_default();
         if event["kind"] == "user" && data["gate"] != json!(true) && data["drawing"] != json!(true) && data["goal"] != json!(true) {
             turn = (0, 0.0, 0);
         }
@@ -182,18 +183,35 @@ pub fn fold(events: &[Value], pending: &[&str], running: bool) -> Vec<Item> {
                     *detail = result_line(text, failed);
                 }
             }
-            "changes" => items.push(Item::Changes {
-                event: event["id"].as_i64().unwrap_or_default(),
-                files: data["files"]
+            // A run of edits is one line, not one line per edit: consecutive change rows are
+            // merged into the row above, each file keeping its latest state. Three "Changed 1 file"
+            // rows in a row read as history nobody asked for; what a person wants is the shape of
+            // what the turn has touched, and Undo still takes back the most recent one.
+            "changes" => {
+                let files: Vec<(String, String)> = data["files"]
                     .as_array()
                     .map(|f| {
                         f.iter()
                             .map(|c| (c["status"].as_str().unwrap_or("M").to_string(), c["path"].as_str().unwrap_or_default().to_string()))
                             .collect()
                     })
-                    .unwrap_or_default(),
-                undone: false,
-            }),
+                    .unwrap_or_default();
+                if let Some(Item::Changes { event, files: seen, .. }) = items.last_mut() {
+                    for (status, path) in files {
+                        match seen.iter_mut().find(|(_, seen)| *seen == path) {
+                            Some(slot) => slot.0 = status,
+                            None => seen.push((status, path)),
+                        }
+                    }
+                    *event = (*event).max(data_event_id);
+                } else {
+                    items.push(Item::Changes {
+                        event: data_event_id,
+                        files,
+                        undone: false,
+                    });
+                }
+            }
             "undone" => {
                 let which = data["event"].as_i64();
                 for item in items.iter_mut() {
@@ -2422,6 +2440,42 @@ mod tests {
             })
             .collect();
         assert_eq!(named, ["", "", "deepseek-flash", "deepseek-flash"], "under the last step of each turn only");
+    }
+
+    /// Three edits in a row are one line, not three: a file keeps its latest status, and Undo still
+    /// points at the most recent change.
+    #[test]
+    fn a_run_of_edits_is_one_line_with_each_file_at_its_latest_state() {
+        let changes = |id: i64, files: Value| {
+            json!({ "id": id, "kind": "changes", "data": { "files": files } })
+        };
+        let items = fold(
+            &[
+                event("user", json!({ "text": "go" })),
+                changes(1, json!([{ "status": "M", "path": "a.go" }])),
+                changes(2, json!([{ "status": "M", "path": "b.go" }, { "status": "A", "path": "a.go" }])),
+                changes(3, json!([{ "status": "M", "path": "c.go" }])),
+            ],
+            &[],
+            false,
+        );
+        let rows: Vec<&Item> = items.iter().filter(|i| matches!(i, Item::Changes { .. })).collect();
+        assert_eq!(rows.len(), 1, "one line for the run of edits: {items:?}");
+        match rows[0] {
+            Item::Changes { event, files, .. } => {
+                assert_eq!(*event, 3, "Undo takes back the most recent change");
+                assert_eq!(
+                    files,
+                    &vec![
+                        ("A".to_string(), "a.go".to_string()),
+                        ("M".to_string(), "b.go".to_string()),
+                        ("M".to_string(), "c.go".to_string())
+                    ],
+                    "each file once, at its latest state"
+                );
+            }
+            _ => unreachable!(),
+        }
     }
 
     #[test]

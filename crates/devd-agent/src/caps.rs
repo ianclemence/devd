@@ -2039,9 +2039,23 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
                     max_turns: a.max_turns,
                     effort: a.effort.clone(),
                 })?;
-                // The run answers into the conversation that asked for it.
+                // The run answers into the conversation that asked for it, and that conversation
+                // takes the run's name. Its title was generated when it was made — "A team run
+                // (id 6548ec1b-…) is already running" — which is a database key wearing a
+                // sentence: the breadcrumb, the list and the header must not each name the same
+                // conversation differently. A title a person chose is left alone.
                 if let Some(thread) = a.thread.as_deref().filter(|t| !t.is_empty()) {
                     let _ = ctx.store.set_run_thread(&run.id, thread);
+                    let generated = ctx
+                        .store
+                        .get_thread(thread)?
+                        .is_some_and(|t| t.title.starts_with("A team run ("));
+                    if generated {
+                        let name: String = a.goal.trim().chars().take(80).collect();
+                        if !name.is_empty() {
+                            let _ = ctx.store.update_thread(thread, Some(&name), None, None);
+                        }
+                    }
                 }
                 let data = devd_core::deeplink::with_link(serde_json::to_value(&run)?, devd_core::deeplink::run(&run.id));
                 Ok(Outcome::with_data("The planner is working; the team starts as soon as the plan is ready", data))

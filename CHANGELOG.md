@@ -10,6 +10,21 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.39.3] - 2026-11-20 - One name, one line
+
+### Fixed
+
+- **A run's conversation is named by its goal when the run starts**, so the
+  breadcrumb, the list and the header agree. The title was generated when the
+  conversation was made — "A team run (id 6548ec1b-…) is already running" — which
+  is a database key wearing a sentence. A title a person chose is left alone; only
+  the generated one is replaced.
+- **A run of edits is one line.** Three "Changed 1 file — Undo" rows for three
+  edits read as history nobody asked for; consecutive change rows now merge, each
+  file keeping its latest state, and Undo still takes back the most recent change.
+
+---
+
 ## [0.39.2] - 2026-11-20 - The room's name, in the list
 
 ### Fixed
