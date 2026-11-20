@@ -667,6 +667,24 @@ impl CompletionPolicy {
     /// require a test run, and a request to fix code does. A person's explicit
     /// criteria always require verification.
     pub fn for_goal(goal: &str, acceptance: &[String]) -> Self {
+        // A review is not the work it reviews. "Review the change against the README" contains
+        // "change", so the classifier read it as a request to change code and demanded a passing
+        // check from a reviewer whose whole proof is that it read the diff and reported a verdict —
+        // the team layer judges that verdict separately. Whichever verb the request opens with
+        // decides: review, audit, inspect and verify ask for a judgement, not an edit.
+        let opening = goal.trim_start().to_ascii_lowercase();
+        let reviewing = ["review", "re-review", "audit", "inspect", "assess", "verify the"]
+            .iter()
+            .any(|verb| opening.starts_with(verb));
+        if reviewing && acceptance.is_empty() {
+            return Self {
+                kind: "review".into(),
+                requires_change: false,
+                requires_verify: false,
+                note: "the request asks for a judgement of work already done, not for a change".into(),
+                acceptance: Vec::new(),
+            };
+        }
         // Words inside code (fences or backticks) are content, not the request: "Build"
         // in a diagram is not an instruction to build. The rest is matched on word starts,
         // so "address" does not read as "add".
@@ -1848,6 +1866,26 @@ mod tests {
             "a deliberate retry is allowed"
         );
         assert!(!RunState::Cancelled.can_transition_to(RunState::Executing));
+    }
+
+    /// The reviewer in a real run was asked to "review the change against README and house rules",
+    /// which the classifier read as a request to change code: it demanded a passing check from a
+    /// role whose entire proof is reading the diff and saying what it found.
+    #[test]
+    fn a_review_of_a_change_does_not_demand_a_change_of_its_own() {
+        for goal in [
+            "Review the change against README and house rules",
+            "Re-review the fixes",
+            "Audit the metrics module for correctness",
+            "Inspect the migration and report what you find",
+        ] {
+            let p = CompletionPolicy::for_goal(goal, &[]);
+            assert!(!p.requires_change, "{goal}");
+            assert!(!p.requires_verify, "{goal}");
+        }
+        // The words still count when the person really is asking for the change.
+        let p = CompletionPolicy::for_goal("Change the review page layout", &[]);
+        assert!(p.requires_change && p.requires_verify);
     }
 
     #[test]
