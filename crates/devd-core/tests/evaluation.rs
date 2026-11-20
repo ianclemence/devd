@@ -38,8 +38,15 @@ use devd_core::store_runs::{NewApproval, NewEvidence, RunSpec};
 use devd_core::{DispatchOptions, Registry};
 
 #[derive(Debug, Deserialize, JsonSchema)]
+/// The arguments the stand-in capabilities take. `task` is here because the fixture calls one of
+/// them the way the real `project.run` is called — with the task's name — and a capability takes
+/// exactly what it declares: a field that is only ignored would let this test pass while the real
+/// capability refused the call.
 struct CountArgs {
     n: i64,
+    #[serde(default)]
+    #[allow(dead_code)] // declared because the call carries it, not because the fixture reads it
+    task: Option<String>,
 }
 
 fn fixture() -> (Arc<Store>, Ctx, tempfile::TempDir) {
