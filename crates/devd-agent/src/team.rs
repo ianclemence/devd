@@ -48,6 +48,32 @@ pub const MAX_TASKS: usize = 14;
 /// Most times a task is started before a person has to look at it.
 pub const MAX_ATTEMPTS: i64 = 3;
 
+/// How many times a task may be retried because the provider could not be reached. It is larger
+/// than [`MAX_ATTEMPTS`] and does not consume it: a network is retried, work is not.
+const MAX_NETWORK_RETRIES: usize = 8;
+
+/// Whether a stop was the provider or the network rather than the task.
+fn is_network_failure(why: &str) -> bool {
+    let why = why.to_ascii_lowercase();
+    [
+        "did not answer in time",
+        "could not find",
+        "closed the connection",
+        "connection reset",
+        "connection refused",
+        "econnrefused",
+        "enotfound",
+        "etimedout",
+        "timed out",
+        "network",
+        "offline",
+        "unreachable",
+        "dns",
+    ]
+    .iter()
+    .any(|needle| why.contains(needle))
+}
+
 /// What a run may spend in model turns when the person set no ceiling: enough for several tasks,
 /// small enough that a runaway is paused and shown beside the run rather than discovered later.
 pub const DEFAULT_RUN_TURNS: i64 = 160;
@@ -2862,9 +2888,51 @@ impl Team {
         Ok(())
     }
 
+    /// Whether a stop was the network rather than the work.
+    ///
+    /// A provider that cannot be reached is not the task failing: the conversation ended with an
+    /// error devd itself recorded, and the same attempt is owed another go. These are counted
+    /// separately from the task's own attempts, because three DNS blips in a row should not close
+    /// work that was one step from finishing — which is exactly what happened to a page task in a
+    /// real run.
+    fn network_retries(&self, run_id: &str, key: &str) -> usize {
+        self.ctx
+            .store
+            .list_team_events(run_id, 0, 500)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|e| {
+                e.kind == "retrying"
+                    && e.data["task"] == json!(key)
+                    && e.data["network"] == json!(true)
+            })
+            .count()
+    }
+
     fn failed(self: &Arc<Self>, run: &TeamRun, t: &TeamTask, why: &str) -> Result<()> {
         if let Some(project) = &run.project {
             let _ = self.ctx.store.release_write_lease(project, &t.id, &t.id);
+        }
+        let network = is_network_failure(why);
+        let tried = if network { self.network_retries(&run.id, &t.key) } else { MAX_ATTEMPTS as usize };
+        if network && tried < MAX_NETWORK_RETRIES {
+            self.ctx.store.update_team_task(
+                &t.id,
+                TaskUpdate {
+                    state: "pending",
+                    error: Some(&format!(
+                        "The provider could not be reached ({why}). Nothing was lost; it is being tried again without using up the task's attempts."
+                    )),
+                    ..Default::default()
+                },
+            )?;
+            self.event(
+                &run.id,
+                Some(&t.id),
+                "retrying",
+                json!({ "task": t.key, "attempt": t.attempts, "why": why, "network": true }),
+            );
+            return Ok(());
         }
         if t.attempts < MAX_ATTEMPTS {
             self.ctx.store.update_team_task(
@@ -4139,6 +4207,36 @@ pub fn validate_plan(tasks: &[PlanTask]) -> Result<()> {
         return Err(DevdError::invalid("the plan's dependencies form a cycle"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod network_tests {
+    use super::is_network_failure;
+
+    /// The three stops a page task hit in one run, verbatim: the network, not the work.
+    #[test]
+    fn a_provider_that_cannot_be_reached_is_the_network_not_the_task() {
+        for why in [
+            "api.deepseek.com did not answer in time. The network may be slow, or the service busy.",
+            "devd could not find api.deepseek.com. Check the address and that you are online.",
+            "api.deepseek.com closed the connection before it answered.",
+            "error sending request: connection refused (os error 10061)",
+        ] {
+            assert!(is_network_failure(why), "{why}");
+        }
+    }
+
+    #[test]
+    fn work_that_failed_is_not_the_network() {
+        for why in [
+            "it stopped without reporting",
+            "no verification command (test, build, lint or check) was run",
+            "the tests failed: 3 of 17",
+            "the project has uncommitted changes, so devd will not merge into it",
+        ] {
+            assert!(!is_network_failure(why), "{why}");
+        }
+    }
 }
 
 #[cfg(test)]
