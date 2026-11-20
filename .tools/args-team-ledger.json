@@ -1,0 +1,16 @@
+{
+  "project": "D:\\devd\\www\\welcome\\ledger",
+  "goal": "Build the ledger exactly as README.md specifies: accounts (create and list, unique names, kinds validated), transactions that must balance to zero and are written atomically with an idempotency key, reads (transactions and balances computed from entries), the monthly report from account kinds, a v2 migration adding archived_at with archive and refusal to post against an archived account, the page showing accounts, the month's report and a two-line post form that shows the service's own reasons, and the key every route but health requires.",
+  "done_when": [
+    "npm test passes and covers: an unbalanced transaction is refused and writes nothing; a zero amount and a bad kind are refused; duplicate names and duplicate idempotency keys behave as specified",
+    "two parallel posts of different transactions both land and the balances add up afterwards",
+    "the report's income and expense come from account kinds, not from the sign of the amount",
+    "the v2 migration adds archived_at, migrates a v1 database keeping its data, and refuses a newer version with a clear error",
+    "an archived account still appears in balances and is refused in a new transaction",
+    "every route but /api/health answers 401 without the right x-ledger-key, and the service refuses to start with no LEDGER_KEY",
+    "the page renders accounts with balances, the month's report and a two-line post form, and shows the service's own error and reason when refused",
+    "money is integer cents in the database, the API and the page, with no float arithmetic anywhere",
+    "the service starts with a key, the README's curl sequence works against it, and nothing was left listening afterwards"
+  ],
+  "parallel": 2
+}

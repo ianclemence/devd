@@ -1,0 +1,11 @@
+{
+  "project": "D:\\devd\\www\\welcome\\pulse",
+  "goal": "Add a version endpoint and its test. GET /api/version answers JSON { service, version, node } where service is the SERVICE constant's name, version is its version and node is process.version. Add the test to a new file tests/version.test.js, HTTP-level like the others. Add one line to docs/decisions.md saying where the version number lives and why it has no separate copy. Keep every existing test passing.",
+  "done_when": [
+    "GET /api/version answers 200 JSON with service, version and node",
+    "tests/version.test.js covers the shape and that version equals the SERVICE constant's version",
+    "npm test passes with the new test included",
+    "docs/decisions.md gains one line naming src/server.js's SERVICE as the single source of the version"
+  ],
+  "parallel": 2
+}
