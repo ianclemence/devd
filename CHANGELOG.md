@@ -10,6 +10,42 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.39.4] - 2026-11-20 - What a real run found
+
+A team run on a fresh project (`pulse`, a small Node status board) was followed from the
+first plan to the last check, with every tool call recorded. It finished the work, and the
+harness had six things to learn from the way it did.
+
+### Fixed
+
+- **A recovered task no longer keeps the run from finishing.** A task that stopped once and
+  then finished still carried `failure_kind`, and its stale stop was cited as the reason a
+  run whose every task was done and whose gatekeeper approved was marked `changes_needed`.
+  Completion cites a stop only while the task is unfinished.
+- **A message a one-shot command leaves behind is answered.** `devd call chat.send` writes
+  the person's message and the run, then exits; the process that owns the agents never saw
+  it, and the thread sat at `running` with nobody driving it while the command said "the
+  agent is working". The host now picks that case up on its own, every three seconds.
+- **A member that may write only some files gets its own copy.** A QA task holding a test
+  file worked in the project's tree, and its uncommitted edits refused another member's
+  finished branch at merge time. A task with a non-empty scope is treated like a writer.
+- **A blocked merge unsticks itself.** Once nothing else is writing and the tree is clean,
+  the scheduler retries a task that was blocked on a dirty tree, instead of leaving a
+  finished task waiting for a person to notice.
+- **A project check run by hand counts as a verification.** `project.exec` with `npm test`
+  (or cargo, go, node --test, pytest, dotnet, mvn, gradle, make, mix, php artisan,
+  composer) is recorded as verification, matching argv exactly and never a shell string.
+  Before, only `project.run` counted, and a member with twelve green tests was rejected.
+- **A member can stop what it started.** `project.status` and `project.stop` are available
+  to every role, so a server run to look at the work does not outlive the task.
+
+### Added
+
+- **`devd call --args-file <path>`**, because a JSON object cannot survive a Windows
+  command line: the quotes that make it JSON are the ones the argument parser strips.
+
+---
+
 ## [0.39.3] - 2026-11-20 - One name, one line
 
 ### Fixed
