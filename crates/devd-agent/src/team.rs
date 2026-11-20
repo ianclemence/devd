@@ -232,6 +232,37 @@ const VERIFY_TASKS: &[&str] = &[
     "fmt-check",
 ];
 
+/// Whether a program run through `project.exec` is one of the project's own checks.
+///
+/// The same command can be reached two ways: `project.run {task:"test"}` runs the task the project
+/// declares, and `project.exec {argv:["npm","test"]}` runs the same thing by hand. Only the first
+/// used to count as a verification, so a member that proved its work through `project.exec` had its
+/// report rejected for "no verification command" while the output showed 12 green tests. A runner
+/// and a subcommand are matched exactly, never a shell string, so this cannot be widened by
+/// wrapping something else in `bash -c`.
+fn check_command(argv: &[String]) -> bool {
+    let words: Vec<String> = argv.iter().map(|a| a.to_ascii_lowercase()).collect();
+    let is_check = |word: &str| VERIFY_TASKS.contains(&word);
+    match words.as_slice() {
+        [runner, sub, ..] if runner == "npm" || runner == "pnpm" || runner == "yarn" || runner == "bun" => {
+            sub == "test" || sub == "t" || (sub == "run" && words.get(2).is_some_and(|w| is_check(w)))
+        }
+        [runner, sub, ..] if runner == "cargo" => matches!(sub.as_str(), "test" | "check" | "clippy" | "build"),
+        [runner, sub, ..] if runner == "go" => matches!(sub.as_str(), "test" | "vet" | "build"),
+        [runner, flag, ..] if runner == "node" => flag == "--test" || flag == "--run-tests",
+        [runner, ..] if runner == "pytest" || runner == "tox" || runner == "nox" => true,
+        [runner, flag, ..] if runner == "python" || runner == "python3" => flag == "-m" && words.get(2).is_some_and(|w| w == "pytest"),
+        [runner, sub, ..] if runner == "dotnet" => matches!(sub.as_str(), "test" | "build"),
+        [runner, sub, ..] if runner == "mvn" || runner == "gradle" || runner == "./gradlew" => is_check(sub),
+        [runner, sub, ..] if runner == "make" => is_check(sub),
+        [runner, sub, ..] if runner == "mix" => sub == "test",
+        [runner, sub, ..] if runner == "bundle" || runner == "rake" => sub == "exec" || sub == "test",
+        [runner, sub, ..] if runner == "php" => sub == "artisan" && words.get(2).is_some_and(|w| w == "test"),
+        [runner, sub, ..] if runner == "composer" => sub == "test",
+        _ => false,
+    }
+}
+
 /// A task as the planner submits it.
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct PlanTask {
@@ -350,22 +381,17 @@ pub fn evidence(events: &[ChatEvent]) -> Vec<Value> {
                         let exit = data["exit_code"].as_i64();
                         let passed =
                             outcome_ok && data["ok"].as_bool().unwrap_or(false) && exit == Some(0);
-                        let is_verify = cap == "project.run"
-                            && VERIFY_TASKS.contains(&task.to_ascii_lowercase().as_str());
+                        let argv: Vec<String> = args["argv"]
+                            .as_array()
+                            .map(|a| a.iter().filter_map(|x| x.as_str()).map(str::to_string).collect())
+                            .unwrap_or_default();
+                        let is_verify = (cap == "project.run"
+                            && VERIFY_TASKS.contains(&task.to_ascii_lowercase().as_str()))
+                            || (cap != "project.run" && check_command(&argv));
                         let label = if cap == "project.run" {
                             format!("task `{task}`")
                         } else {
-                            format!(
-                                "`{}`",
-                                args["argv"]
-                                    .as_array()
-                                    .map(|a| a
-                                        .iter()
-                                        .filter_map(|x| x.as_str())
-                                        .collect::<Vec<_>>()
-                                        .join(" "))
-                                    .unwrap_or_default()
-                            )
+                            format!("`{}`", argv.join(" "))
                         };
                         out.push(json!({ "kind": if is_verify { "verify" } else { "command" }, "capability": cap, "ok": passed, "exit_code": exit, "summary": label }));
                     }
@@ -4113,6 +4139,57 @@ pub fn validate_plan(tasks: &[PlanTask]) -> Result<()> {
         return Err(DevdError::invalid("the plan's dependencies form a cycle"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod check_command_tests {
+    use super::check_command;
+
+    fn argv(words: &[&str]) -> Vec<String> {
+        words.iter().map(|w| w.to_string()).collect()
+    }
+
+    /// The same command by hand is the same proof: a member that ran `npm test` through
+    /// `project.exec` did verify its work, and the pulse run's frontend was rejected for it.
+    #[test]
+    fn a_project_check_run_by_hand_counts_as_a_verification() {
+        for command in [
+            vec!["npm", "test"],
+            vec!["npm", "run", "test"],
+            vec!["npm", "run", "check"],
+            vec!["pnpm", "test"],
+            vec!["yarn", "test"],
+            vec!["cargo", "test"],
+            vec!["cargo", "clippy"],
+            vec!["go", "test", "./..."],
+            vec!["go", "vet", "./..."],
+            vec!["node", "--test"],
+            vec!["pytest", "-q"],
+            vec!["python", "-m", "pytest"],
+            vec!["dotnet", "test"],
+            vec!["make", "check"],
+            vec!["mix", "test"],
+            vec!["php", "artisan", "test"],
+            vec!["composer", "test"],
+        ] {
+            assert!(check_command(&argv(&command)), "{command:?}");
+        }
+    }
+
+    #[test]
+    fn something_that_is_not_a_check_is_not_one() {
+        for command in [
+            vec!["npm", "start"],
+            vec!["npm", "run", "dev"],
+            vec!["node", "src/server.js"],
+            vec!["bash", "-c", "npm test"],
+            vec!["node", "-e", "fetch('https://example.com')"],
+            vec!["git", "push", "origin", "main"],
+            vec!["echo", "tests passed"],
+        ] {
+            assert!(!check_command(&argv(&command)), "{command:?} is not a check");
+        }
+    }
 }
 
 #[cfg(test)]
