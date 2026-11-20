@@ -254,6 +254,15 @@ pub fn needs_final_verification(real: &[&TeamTask]) -> bool {
 pub fn check(run: &TeamRun, tasks: &[TeamTask], pending_approvals: usize) -> Completion {
     let real: Vec<&TeamTask> = tasks.iter().filter(|t| t.role != "planner").collect();
     let mut reasons = Vec::new();
+    // Reasons are read by a person, not by the scheduler: the task's own title says what is not
+    // finished, where its key said only "page".
+    let name = |t: &TeamTask| -> String {
+        if t.title.trim().is_empty() {
+            t.key.clone()
+        } else {
+            format!("\"{}\"", t.title.trim())
+        }
+    };
 
     // Work that is not in a terminal state stops completion regardless of what
     // any other task says.
@@ -264,7 +273,7 @@ pub fn check(run: &TeamRun, tasks: &[TeamTask], pending_approvals: usize) -> Com
         ) {
             reasons.push(format!(
                 "{} is still {}",
-                t.key,
+                name(t),
                 t.state.replace('_', " ")
             ));
         }
@@ -275,7 +284,7 @@ pub fn check(run: &TeamRun, tasks: &[TeamTask], pending_approvals: usize) -> Com
         if t.state != "skipped" && t.state != "done" {
             if let Some(kind) = &t.failure_kind {
                 if matches!(kind.as_str(), "policy" | "environment" | "pre-existing") {
-                    reasons.push(format!("{} stopped: {}", t.key, t.error.clone().unwrap_or_else(|| kind.clone())));
+                    reasons.push(format!("{} stopped: {}", name(t), t.error.clone().unwrap_or_else(|| kind.clone())));
                 }
             }
         }
