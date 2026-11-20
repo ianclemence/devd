@@ -74,6 +74,29 @@ fn is_network_failure(why: &str) -> bool {
     .any(|needle| why.contains(needle))
 }
 
+/// Whether the provider refused because the account has no money left.
+///
+/// This is not a failure of the work and not a network problem: nothing the agent does can fix it,
+/// and the fix is a person topping up an account. The task therefore keeps its attempts, waits a
+/// minute, and tries again — so the run finishes on its own once the balance is back.
+fn is_billing_failure(why: &str) -> bool {
+    let why = why.to_ascii_lowercase();
+    [
+        "out of credit",
+        "insufficient balance",
+        "insufficient_balance",
+        "needs billing",
+        "billing set up",
+        "payment required",
+        "credit balance",
+        "http 402",
+        "quota exceeded",
+        "exceeded your current quota",
+    ]
+    .iter()
+    .any(|needle| why.contains(needle))
+}
+
 /// What a run may spend in model turns when the person set no ceiling: enough for several tasks,
 /// small enough that a runaway is paused and shown beside the run rather than discovered later.
 pub const DEFAULT_RUN_TURNS: i64 = 160;
@@ -749,6 +772,9 @@ pub struct Team {
     extended: Mutex<HashSet<String>>,
     /// Tasks already told they have read enough, so the word is said once.
     read_enough: Mutex<HashSet<String>>,
+    /// Tasks held for a minute because the provider asked for money, so the account can be topped
+    /// up without the scheduler hammering it and without a person finding the failed task.
+    credit_hold: Mutex<HashMap<String, std::time::Instant>>,
 }
 
 fn is_done(state: &str) -> bool {
@@ -880,6 +906,7 @@ impl Team {
             warned: Mutex::new(HashSet::new()),
             extended: Mutex::new(HashSet::new()),
             read_enough: Mutex::new(HashSet::new()),
+            credit_hold: Mutex::new(HashMap::new()),
         })
     }
 
@@ -2491,6 +2518,12 @@ impl Team {
             .iter()
             .filter(|t| t.state == "pending" && t.role != "planner")
         {
+            // A task held back because the provider wanted money is not started until the hold
+            // expires: retrying a billing refusal every tick is a request storm, and the account
+            // is not going to have credit between two ticks.
+            if self.credit_held(&t.id) {
+                continue;
+            }
             if active + started >= run.parallel {
                 break;
             }
@@ -2949,6 +2982,21 @@ impl Team {
         Ok(())
     }
 
+    /// Whether a task is still inside the minute it waits after the provider asked for money.
+    fn credit_held(&self, task_id: &str) -> bool {
+        let Ok(mut holds) = self.credit_hold.lock() else {
+            return false;
+        };
+        match holds.get(task_id) {
+            Some(until) if std::time::Instant::now() < *until => true,
+            Some(_) => {
+                holds.remove(task_id);
+                false
+            }
+            None => false,
+        }
+    }
+
     /// Whether a stop was the network rather than the work.
     ///
     /// A provider that cannot be reached is not the task failing: the conversation ended with an
@@ -2973,6 +3021,36 @@ impl Team {
     fn failed(self: &Arc<Self>, run: &TeamRun, t: &TeamTask, why: &str) -> Result<()> {
         if let Some(project) = &run.project {
             let _ = self.ctx.store.release_write_lease(project, &t.id, &t.id);
+        }
+        // An account without credit is not a failed task and not a failed run: it is a bill. The
+        // task goes back to pending, costs no attempt, and is held for a minute; when the person
+        // tops up, the next start simply works, and nobody has to find the failed task and retry it
+        // by hand — which is what a real run needed.
+        if is_billing_failure(why) {
+            if let Ok(mut holds) = self.credit_hold.lock() {
+                holds.insert(t.id.clone(), std::time::Instant::now() + std::time::Duration::from_secs(60));
+            }
+            self.ctx.store.update_team_task(
+                &t.id,
+                TaskUpdate {
+                    state: "pending",
+                    error: Some(&format!(
+                        "The provider needs credit: {why}. The task will be tried again by itself once the account can answer; nothing was lost and no attempt was used."
+                    )),
+                    ..Default::default()
+                },
+            )?;
+            self.event(
+                &run.id,
+                Some(&t.id),
+                "needs_credit",
+                json!({ "task": t.key, "why": why, "retry_in_seconds": 60 }),
+            );
+            self.say_in_requester(
+                run,
+                &format!("The provider wants credit ({why}). The work is kept; devd will retry the task by itself every minute until the account can answer, without using up the task's attempts."),
+            );
+            return Ok(());
         }
         let network = is_network_failure(why);
         let tried = if network { self.network_retries(&run.id, &t.key) } else { MAX_ATTEMPTS as usize };
@@ -4272,7 +4350,27 @@ pub fn validate_plan(tasks: &[PlanTask]) -> Result<()> {
 
 #[cfg(test)]
 mod network_tests {
-    use super::is_network_failure;
+    use super::{is_billing_failure, is_network_failure};
+
+    /// The refusal a real run stopped on, verbatim, and the shapes the same thing takes elsewhere.
+    #[test]
+    fn an_account_without_credit_is_a_bill_not_a_failure() {
+        for why in [
+            "permission denied: DeepSeek says this account is out of credit or needs billing set up (HTTP 402): Insufficient Balance",
+            "402 Payment Required",
+            "you exceeded your current quota, please check your plan and billing details",
+        ] {
+            assert!(is_billing_failure(why), "{why}");
+            assert!(!is_network_failure(why), "a bill is not the network: {why}");
+        }
+        for why in [
+            "it stopped without reporting",
+            "the tests failed: 3 of 17",
+            "api.deepseek.com did not answer in time",
+        ] {
+            assert!(!is_billing_failure(why), "{why}");
+        }
+    }
 
     /// The three stops a page task hit in one run, verbatim: the network, not the work.
     #[test]
