@@ -329,6 +329,16 @@ fn reply_label(model: &str, (tokens, cost, ms): (u64, f64, u64)) -> String {
     parts.join(" · ")
 }
 
+/// Who a row belongs to, for spacing: every row of one turn shares a value, and a new value starts
+/// a new turn. The person and the assistant are different turns; the assistant and its own tool
+/// steps are one.
+fn turn_of(item: &Item) -> u8 {
+    match item {
+        Item::You { .. } => 0,
+        _ => 1,
+    }
+}
+
 /// An agent's turn is many model calls: a sentence, a tool, a sentence, a tool. Read together they are one
 /// reply, so the model that wrote it is named once, under the last thing it wrote before the person spoke
 /// again, not under every step.
@@ -1682,12 +1692,22 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
                 None => div().into_any_element(),
             },
         };
+        // A new speaker starts a turn, and a turn is worth more air than a step inside one. Every
+        // row used to get the same 7px above and below, so the fifth tool call of a turn and the
+        // first sentence of the next one looked equally far apart and the conversation read as a
+        // single block.
+        let opens_turn = match (items.get(index.saturating_sub(1)), items.get(index)) {
+            (None, _) => true,
+            (Some(previous), Some(current)) => turn_of(previous) != turn_of(current),
+            _ => false,
+        };
         div()
             .w_full()
             .flex()
             .justify_center()
             .px(px(24.0))
-            .py(px(7.0))
+            .pt(px(if opens_turn { 22.0 } else { 7.0 }))
+            .pb(px(7.0))
             .child(div().w_full().max_w(px(size::READING)).child(content))
             .into_any_element()
     })
