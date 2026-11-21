@@ -290,9 +290,13 @@ fn list(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
                 .flex()
                 .flex_col()
                 .gap(px(4.0))
+                // Title and detail are two levels, not one. They were both TEXT_SM and differed
+                // only by colour, which is why a list of runs read as a wall: the eye had nowhere
+                // to land first.
                 .child(
                     div()
-                        .text_size(px(size::TEXT_SM))
+                        .text_size(px(size::TEXT))
+                        .font_weight(FontWeight::MEDIUM)
                         .text_color(t.text)
                         .child(title),
                 )
