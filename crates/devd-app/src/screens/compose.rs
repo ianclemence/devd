@@ -19,7 +19,7 @@ use gpui::{
     AnyElement, ClickEvent, Context, FontWeight, PathPromptOptions, deferred, div, prelude::*, px,
     relative,
 };
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::shell::Shell;
 use crate::state::{devd, q};

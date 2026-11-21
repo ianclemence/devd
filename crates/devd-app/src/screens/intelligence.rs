@@ -223,6 +223,10 @@ fn spend(usage: &Value, cx: &Context<Shell>) -> Div {
         .unwrap_or(&[]);
     let tokens = |m: &Value| m["input"].as_u64().unwrap_or(0) + m["output"].as_u64().unwrap_or(0);
     let most = models.iter().map(tokens).max().unwrap_or(0).max(1);
+    // The bar is the share of the busiest model. With one model that share is 100% by
+    // construction, so it reads as a meter that never moves; it is drawn only when there is
+    // something to compare. The tokens and the price beside it still count up every turn.
+    let compare = models.iter().filter(|m| tokens(m) > 0).count() > 1;
     for model in models.iter().filter(|m| tokens(m) > 0).take(6) {
         let share = tokens(model) as f32 / most as f32;
         body = body.child(rule(cx)).child(
@@ -243,15 +247,15 @@ fn spend(usage: &Value, cx: &Context<Shell>) -> Div {
                         )),
                 )
                 // The bar is the share of the busiest model, so the eye finds where the tokens went.
-                .child(
+                .children(compare.then(|| {
                     div().flex_1().h(px(4.0)).rounded_full().bg(t.hover).child(
                         div()
                             .h_full()
                             .w(gpui::relative(share.max(0.01)))
                             .rounded_full()
                             .bg(t.muted),
-                    ),
-                )
+                    )
+                }))
                 .child(
                     div()
                         .w(px(76.0))

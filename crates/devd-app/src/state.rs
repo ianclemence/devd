@@ -58,6 +58,9 @@ pub struct Devd {
     pub pending_ui: Vec<crate::ui::genui::Act>,
     /// Where the slow pulse of every "happening now" mark is, 0 to 3.
     pub beat: u8,
+    /// How many beats have passed, for the slow poll that keeps provider health from going stale.
+    /// It counts up and is never reset, so the interval does not drift when `beat` wraps.
+    pub beats: u32,
     /// Whether such a mark was drawn since the last beat. Only then is the
     /// window redrawn for the next one.
     pub live_seen: std::cell::Cell<bool>,
@@ -239,6 +242,7 @@ pub fn start(conn: Arc<Connection>, cx: &mut App) {
         steps_toggled: None,
         pending_ui: Vec::new(),
         beat: 0,
+        beats: 0,
         live_seen: std::cell::Cell::new(false),
         link_root: None,
         chat_running: std::cell::Cell::new(false),
@@ -364,6 +368,16 @@ pub fn start(conn: Arc<Connection>, cx: &mut App) {
                     .toasts
                     .retain(|t| now.duration_since(t.at) < t.stays());
                 state.beat = (state.beat + 1) % 4;
+                // Provider health goes stale on its own: an account topped up, a key rotated, a
+                // service back after an outage. The list used to say "Not answering" until the
+                // person refreshed, which is the one thing they should not have to do to learn that
+                // devd works again. Every eighth beat (about three seconds) the inventory is asked
+                // for again; it is a local read, and only a screen showing models asks for it.
+                state.beats = state.beats.wrapping_add(1);
+                if state.beats % 8 == 0 {
+                    state.sync.peek(&q::inventory()); // peeking first keeps an unopened screen cold
+                    state.sync.invalidate("models.inventory");
+                }
                 let pulsing = state.live_seen.replace(false);
                 // A conversation that is running may be running somewhere else: ask again, not wait.
                 if state.chat_running.replace(false) {

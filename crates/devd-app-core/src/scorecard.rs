@@ -187,13 +187,17 @@ pub fn agents(stats: &Value, usage: &Value) -> Vec<Scorecard> {
 
 /// Models, from `team.stats.models` and `models.usage.by_model`. A model that
 /// did work but has no finished task yet is still shown, so its cost is visible.
+///
+/// A row whose name is `not recorded` is left out entirely: it is every task devd cannot attribute
+/// to a model, so it has no name to rank and its "accepted 44 of 44" says nothing about anything.
+/// It was a line in the table that could only mislead - a bucket presented beside real models.
 pub fn models(stats: &Value, usage: &Value) -> Vec<Scorecard> {
     let mut rows: Vec<Scorecard> = stats["models"]
         .as_array()
         .map(Vec::as_slice)
         .unwrap_or(&[])
         .iter()
-        .filter(|row| number(row, "tasks") > 0)
+        .filter(|row| number(row, "tasks") > 0 && row["name"].as_str() != Some("not recorded"))
         .map(|row| {
             let name = row["name"].as_str().unwrap_or_default();
             from_row(row, usage_row(usage, "by_model", name))
@@ -278,13 +282,17 @@ mod tests {
         assert!(rows[1].score.unwrap() < 70.0);
     }
 
+    /// The bucket of work devd cannot attribute to a model used to sit in the table beside real
+    /// models, with "44 of 44 accepted" and "no price". It has no name to rank and nothing to say.
     #[test]
-    fn a_model_whose_name_was_not_recorded_is_shown_but_not_ranked() {
-        let stats = json!({ "models": [role("not recorded", 10, 7, 0.7, 0.2, 0.8)] });
+    fn a_model_whose_name_was_not_recorded_is_left_out() {
+        let stats = json!({ "models": [
+            role("not recorded", 10, 7, 0.7, 0.2, 0.8),
+            role("deepseek-flash", 4, 3, 0.75, 0.3, 0.8),
+        ] });
         let rows = models(&stats, &json!({}));
-        assert_eq!(rows[0].rank, None);
-        assert_eq!(rows[0].score, None);
-        assert_eq!(rows[0].note(), "model not recorded");
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].name, "deepseek-flash");
     }
 
     #[test]
