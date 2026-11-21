@@ -481,15 +481,18 @@ pub fn render(
         Some(id) => conversation(shell, &id, cx),
         None => start(shell, cx),
     };
-    div()
-        .size_full()
-        .flex()
-        .child(sidebar(current.as_deref(), cx))
-        .child(main)
+    // A browser that has taken the window is the thing being looked at: the conversation and the
+    // list step aside so the page has every pixel, and the strip stays so it can be given back.
+    let maximised = shell.pane.browser_maximised && shell.pane.browser;
+    let mut row = div().size_full().flex();
+    if !maximised {
+        row = row.child(sidebar(current.as_deref(), cx)).child(main);
+    }
+    row = row
         .children(super::pane::pane(shell, cx))
         .child(strip)
-        .bg(ui::ground(cx))
-        .into_any_element()
+        .bg(ui::ground(cx));
+    row.into_any_element()
 }
 
 fn sidebar(current: Option<&str>, cx: &mut Context<Shell>) -> AnyElement {
