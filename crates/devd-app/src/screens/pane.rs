@@ -21,6 +21,11 @@ use crate::ui::{self};
 /// How wide the panels are.
 pub const WIDTH: f32 = 500.0;
 
+/// The share of the window a pane takes when it is the only one open. A browser beside a
+/// conversation is a useful 500px strip; a browser with nothing else open is the thing you are
+/// looking at, and giving it half the window was the complaint.
+pub const SHARE: f32 = 0.72;
+
 /// A panel.
 #[derive(Default, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tab {
@@ -289,8 +294,14 @@ pub fn pane(shell: &mut Shell, cx: &mut Context<Shell>) -> Option<AnyElement> {
     }
     let t = theme(cx).clone();
     let both = shell.pane.browser && shell.pane.terminal;
-    let mut column = div()
-        .w(px(WIDTH))
+    // Alone, a pane takes the room; beside another pane, it stays the compact column.
+    let mut column = div();
+    column = if both {
+        column.w(px(WIDTH))
+    } else {
+        column.w(gpui::relative(SHARE)).min_w(px(WIDTH))
+    };
+    let mut column = column
         .h_full()
         .flex_none()
         .flex()
