@@ -332,10 +332,14 @@ pub fn pane(shell: &mut Shell, cx: &mut Context<Shell>) -> Option<AnyElement> {
             }),
             &t,
         );
+        // Maximised, the tabs step aside with the conversation: the page is the screen, and the
+        // strip below still switches between them.
+        let tabs = if maximised { Vec::new() } else { parts.tabs };
+        let new_tab = if maximised { div().into_any_element() } else { parts.new };
         let mut panel = div().flex().flex_col().flex_1().min_h_0().child(header(
             "Browser",
-            parts.tabs,
-            parts.new,
+            tabs,
+            new_tab,
             vec![maximise, close],
             &t,
         ));
