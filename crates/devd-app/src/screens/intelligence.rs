@@ -237,9 +237,11 @@ fn spend(usage: &Value, cx: &Context<Shell>) -> Div {
                 .items_center()
                 .gap(px(14.0))
                 .child(
+                    // The name takes the room left over; the number columns keep theirs, because a
+                    // column of figures that drifts is harder to read than a name that truncates.
                     div()
-                        .w(px(220.0))
-                        .flex_none()
+                        .flex_1()
+                        .min_w_0()
                         .font_family(mono())
                         .text_size(px(size::TEXT_SM))
                         .child(ui::Clip::new(
