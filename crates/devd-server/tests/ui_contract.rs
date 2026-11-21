@@ -1965,6 +1965,69 @@ fn list_hover_is_one_rounded_inset_band() {
 }
 
 #[test]
+fn a_rooms_header_names_everyone_in_it_and_where_the_work_stands() {
+    // The header answers "who is involved" before the transcript is read, and the roster it names
+    // is the run's own task roles, the same list the bubbles come from.
+    assert!(APP.contains("read(\"team.get\", { run: runId })"), "the run is read for the header");
+    let start = APP.find("function chatHeadHtml").unwrap();
+    let head = &APP[start..(start + 9000).min(APP.len())];
+    assert!(head.contains("AI.roomRun"), "the header uses the run it read");
+    let at = head.find("AI.roomRun.roles").expect("the roster is in the header");
+    assert!(head[at..].contains("sub.push"), "the roster joins the quiet line");
+    // A room is cleared when the conversation is not one, so a later conversation cannot inherit it.
+    assert!(
+        APP.contains("AI.roomRun = null"),
+        "leaving a room forgets the run it belonged to"
+    );
+}
+
+#[test]
+fn the_composer_in_a_room_speaks_to_the_run() {
+    // Sending in a room is not only a message to the assistant: it is an instruction for the run,
+    // so the work is steered by it. The relay must not turn a finished run's refusal into an error
+    // on a message that was delivered to the conversation.
+    let start = APP.find("function sendChat").unwrap();
+    let send = &APP[start..(start + 6000).min(APP.len())];
+    assert!(send.contains("AI.roomFor && args.message"), "the room is known when the message is sent");
+    assert!(send.contains("run(\"team.say\""), "the message becomes a direction for the run");
+    let at = send.find("team.say").expect("the relay is there");
+    assert!(
+        send[at..].contains(".catch("),
+        "a run that refuses a direction does not surface as a failed message"
+    );
+}
+
+#[test]
+fn a_room_reads_the_whole_run_and_names_who_said_what() {
+    // A conversation that belongs to a run is the room for the whole run: it reads
+    // chat.team_log, so every member's messages appear where the person already is.
+    assert!(APP.contains("read(\"chat.team_log\""), "the room is read from the run's log");
+    let start = APP.find("function chatHtml").unwrap();
+    let end = APP[start..].find("// A conversation with no turns yet").unwrap() + start;
+    let chat = &APP[start..end];
+    assert!(
+        chat.contains("AI.room && AI.room.length"),
+        "the transcript is the room's events when the conversation is in a run"
+    );
+    // A turn's speaker comes from the event, not from the conversation: two members of one room
+    // must never be drawn under one name.
+    assert!(
+        chat.contains("faceHtml(turn.role || role)"),
+        "a turn's face is the speaker's, not the conversation's"
+    );
+    assert!(
+        chat.contains("openTurn(e.created_at, e.id, e.role)"),
+        "a turn records who opened it"
+    );
+    // A message one member addresses to another is its own block, with who it is for inside it.
+    assert!(chat.contains("block.type === \"said\""), "an addressed message has its own block");
+    let said = chat.find("msg-said").expect("the message is drawn");
+    assert!(chat[said..].contains("said-to"), "the message shows who it is addressed to");
+    assert!(CSS.contains(".said-to"), "the address is styled");
+    assert!(CSS.contains(".msg-said"), "the message is styled");
+}
+
+#[test]
 fn the_workspace_surfaces_live_in_the_conversation_menu() {
     // The header keeps only the actions in use: Browser and Terminal are one
     // click away in the menu, and the item shows whether the surface is open.

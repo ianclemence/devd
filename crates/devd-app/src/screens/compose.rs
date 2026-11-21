@@ -14,6 +14,7 @@
 use std::path::{Path, PathBuf};
 
 use devd_app_core::nav::Route;
+use devd_app_core::sync::Mutation;
 use gpui::{
     AnyElement, ClickEvent, Context, FontWeight, PathPromptOptions, deferred, div, prelude::*, px,
     relative,
@@ -65,6 +66,18 @@ pub const EFFORTS: &[(&str, &str)] = &[
     ("max", "Max"),
 ];
 
+/// The effort level a conversation's stored choice names, as the composer holds it.
+///
+/// A conversation that never chose one has no level, and the chip then says what the default is
+/// rather than what was last picked somewhere else.
+pub fn level(effort: Option<&str>) -> Option<&'static str> {
+    let effort = effort?;
+    EFFORTS
+        .iter()
+        .find(|(id, _)| *id == effort)
+        .map(|(id, _)| *id)
+}
+
 /// What the message box has chosen, beyond its text.
 #[derive(Debug, Default)]
 pub struct Compose {
@@ -74,6 +87,9 @@ pub struct Compose {
     pub mode: Option<&'static str>,
     /// The effort chosen, or None for the ordinary default.
     pub effort: Option<&'static str>,
+    /// The conversation these choices belong to, so the effort can be read from it when it opens
+    /// instead of showing whatever was last picked in this window.
+    pub thread: Option<String>,
     /// The provider and model chosen, or None for the default one.
     pub model: Option<(String, String)>,
     /// Files and folders attached to the next message.
@@ -803,6 +819,32 @@ pub fn view(
                     .min_w_0()
                     .py(px(3.0))
                     .child(shell.composer.clone()),
+            )
+            // Next to send: hand this message to the team instead. A project-shaped request used to
+            // become a single agent's conversation with no plan, no worktree and no verdict, because
+            // the only way to start a run was to know the phrase "have the team ..." - this is the
+            // one visible way to choose it. The plan still comes back for approval before any work.
+            .child(
+                Button::new("composer.team", "Team")
+                    .disabled(!sendable)
+                    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                        let goal = this.composer.read(cx).text().trim().to_string();
+                        if goal.is_empty() {
+                            return;
+                        }
+                        this.confirm(
+                            "Hand this to the team?",
+                            format!(
+                                "A planner will propose a plan for:\n\n{}\n\nNothing is built until you approve that plan.",
+                                goal
+                            ),
+                            "Start a run",
+                            false,
+                            Mutation::new("team.start", json!({ "goal": goal })),
+                            window,
+                            cx,
+                        );
+                    })),
             )
             .child(
                 Button::icon_only("composer.send", "arrow-up")

@@ -43,17 +43,24 @@ pub struct Connection {
 }
 
 /// Find a running devd or become one.
+///
+/// The order matters for how long the window takes to appear. Finding the layout and attaching to a
+/// devd that is already running is cheap; opening the store, migrating it and building the whole
+/// capability registry is not, and a window that is going to attach never needs any of it. So the
+/// bootstrap happens only on the path that ends with this process serving.
 pub fn connect() -> Result<Arc<Connection>, String> {
-    let boot = Bootstrap::discover().map_err(|e| format!("devd could not start: {e}"))?;
-    let home = boot.paths.root().display().to_string();
+    let paths = devd_core::Paths::discover().map_err(|e| format!("devd could not start: {e}"))?;
+    let home = paths.root().display().to_string();
     let version = env!("CARGO_PKG_VERSION").to_string();
+    let serve_began = std::time::Instant::now();
     // The team's work belongs to a process that stays up, not to this window: start devd in the background (or use the one
     // already running) and attach to it, so closing the window does not stop a run half way. Only when that cannot be done
     // does the window carry the work itself, as it always has.
-    ensure_resident(&boot.paths, &version);
-    match devd_server::attach_or_claim(&boot.paths, "ui")
-        .map_err(|e| format!("devd could not start: {e}"))?
-    {
+    ensure_resident(&paths, &version);
+    let attached =
+        devd_server::attach_or_claim(&paths, "ui").map_err(|e| format!("devd could not start: {e}"));
+    let _ = crate::SERVE_MS.set(serve_began.elapsed().as_secs_f64() * 1000.0);
+    match attached? {
         Attach::Client { port, .. } => {
             let token = session_token(port)?;
             Ok(Arc::new(Connection {
@@ -67,6 +74,10 @@ pub fn connect() -> Result<Arc<Connection>, String> {
             }))
         }
         Attach::Own(claim) => {
+            // This window is the devd: now it needs the store, the migrations and the registry.
+            let bootstrap_began = std::time::Instant::now();
+            let boot = Bootstrap::at(paths).map_err(|e| format!("devd could not start: {e}"))?;
+            let _ = crate::BOOTSTRAP_MS.set(bootstrap_began.elapsed().as_secs_f64() * 1000.0);
             let (bound, shutdown) = serve(boot, claim)?;
             Ok(Arc::new(Connection {
                 base: format!("http://127.0.0.1:{}", bound.port),
@@ -146,7 +157,8 @@ fn ensure_resident(paths: &devd_core::Paths, version: &str) {
         if devd_core::daemon::current(paths).is_some_and(|held| held.port != 0) {
             return;
         }
-        std::thread::sleep(Duration::from_millis(150));
+        // Short: this is the difference between a window that opens and a window that waits.
+        std::thread::sleep(Duration::from_millis(25));
     }
 }
 

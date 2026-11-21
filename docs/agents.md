@@ -115,6 +115,27 @@ runs under) hold three rules, checked before every model call:
 A provider the policy excludes never sees the project: it is skipped, with the
 rule that excluded it named, before any request is built.
 
+### Thinking
+
+Reasoning is a property of a conversation, not of the window. Each conversation
+carries its own effort — `none` (shown as Off), `low`, `medium`, `high`, `extra`
+or `max` — and the chip under the message box shows **that conversation's**
+level, read from the record when the conversation opens. A conversation that
+never chose one shows the ordinary default, Medium.
+
+The level does two things: it is handed to the provider in its own words (a
+token budget for Anthropic and Gemini, an effort level for DeepSeek and the
+OpenAI family, a toggle for the hosts that think by default), and it sets how
+much room the reply has after thinking, from 8k tokens at Off to 64k at Max.
+Off is a real request, not a hint: it is sent as the provider's own way of
+disconnecting reasoning.
+
+The level is read at **every model call**, so changing it while a reply is being
+written applies from the next call; the call already running finishes at the
+level it started with. A team run takes its level from the conversation that
+started it and gives it to every specialist it creates: changing it in your own
+conversation afterwards does not reach a run that is already going.
+
 ## The team
 
 ```
@@ -415,11 +436,17 @@ wrong. `team.get` returns a `needs` object:
 ```
 
 `reason` is one of `no-report`, `not-proved`, `blocked`, `failed`, `merge`,
-`approval`, `plan` or `criteria`. `missing` names the evidence devd actually
-looked for and did not find, in the same words the scheduler rejected the report
-for. The first action is the one that unblocks the work; accepting without proof
-is offered after it, and is marked dangerous because the run's report will say a
-person accepted it by hand.
+`approval`, `plan`, `criteria`, `verdict` or `budget`. `missing` names the
+evidence devd actually looked for and did not find, in the same words the
+scheduler rejected the report for. The first action is the one that unblocks the
+work; accepting without proof is offered after it, and is marked dangerous
+because the run's report will say a person accepted it by hand.
+
+A run that stopped at its budget asks for the budget, not for a check: the pause
+reason is read before any task is considered, so a task that never ran is never
+reported as a failed review. Its one action opens the run, where the ceiling is
+raised; raising it carries the run on by itself, because resuming into the same
+ceiling would pause again at the next step.
 
 The Inbox, the run view and `team.get` all read this one object, so no two
 screens can phrase the same stuck run differently. A run with nothing waiting has
@@ -754,6 +781,233 @@ devd needs it; optional things that are not set up become setup steps and notes,
 never an unhealthy platform. A service is healthy only after it answers. The
 sidebar shows the state compactly, goes stale after 90 seconds, and the
 Diagnostics page lists every component with what it means and the fix.
+
+## A run as one conversation
+
+A team run is one piece of work, but its messages have lived in one conversation per specialist: to
+see what the team was doing you opened each one, and the conversation you started the run from only
+heard single-line notices. `chat.team_log` reads the whole run as one list instead: the person's
+messages, the planner's, and every specialist's, tagged with the role that said them and interleaved
+in the order they happened.
+
+```json
+{ "run": "…", "origin": "…", "roles": { "<thread>": "implementer" },
+  "threads": ["…"], "events": [{ "thread_id": "…", "role": "implementer",
+                                 "origin": false, "kind": "assistant", "data": { … } }] }
+```
+
+It is a read, not a copy: the per-specialist logs stay where they are, and nothing is duplicated into
+the conversation that started the run, so the assistant's own context never has to be told to ignore
+its team's chatter. Asking from any conversation of the run returns the same list, and a conversation
+that is not part of a run comes back as itself.
+
+The window reads it: a conversation that belongs to a run draws the whole run as one transcript —
+each teammate's turn is a bubble with its face and name, the assistant's own turns stay flat as the
+room's voice, and a message someone addresses to a teammate is a bubble of its own with `@role` and
+what it is about. The per-specialist conversations remain reachable as the detail behind a bubble.
+
+**Talking in the room.** `chat.talk` posts a message into the run's conversation: `to` addresses a
+role (`@reviewer`), `about` names the task it is about, and both are kept with the message so the
+room can show what it answers. The role that speaks is the conversation the call came from — a
+specialist's own thread says `from: implementer`, the conversation that started the run says
+`from: devd` — and an address to a role the run does not have is refused with the roles it does
+have. A message never starts a turn by itself: it is speech, and the scheduler still decides when an
+agent works. An **addressed** message is also delivered: it is queued into the conversation of the
+role it names, so that agent reads it at its next step and can answer in the room. The run's budget
+is what bounds a conversation between agents, not the harness refusing to deliver.
+
+The composer in a room speaks to the team, not only to the assistant: sending while a run is open
+also records the message as a direction for the run (`team.say`), so speaking during the work steers
+it — tasks that have not started take the instruction, and running tasks get it when they next stop.
+The browser client's composer does the same, and a run that has already finished refusing the
+direction is not shown as a failed message, because the message itself was delivered.
+
+Every member's brief says the room exists and how to speak in it, on the first attempt and on every
+restart, because a member that does not know it can be heard cannot ask a question, comment on a
+change, or answer the teammate who addressed it.
+
+The browser client reads the same room: a conversation that belongs to a run draws every member's
+messages from `chat.team_log`, each turn under the name and face of the role that opened it, a change
+of speaker starting a new turn, and an addressed message as its own quiet block with `@who` and what
+it is about. Its header names the run's state and its whole roster (`team.get`), so "who is involved"
+is answered before the transcript is read.
+
+## Settling a conversation
+
+A finished conversation leaves the working list without being deleted: **Settle**
+in its header moves it to a **Settled** shelf at the bottom of the list, dimmed
+and still one click from being opened, reopened, renamed or deleted. Settling
+keeps the log, the chapters and the linked pull request; only the place in the
+list changes. Speaking to a settled conversation reopens it, so work can never
+carry on out of sight.
+
+The conversation's own menu (the three dots at the end of its header) is where
+everything about the conversation rather than the work lives: **Fork from here**,
+**Pin to the top**, **Mark as settled**, **Rename**, **Link a pull request** and
+**Delete**, the last one in the colour that means it cannot be undone. The bar
+keeps only what a person does while working — stop, where the files are, the
+changes, the review — so the header is no longer a row of identical icons.
+Rename and the pull request link are forms: the same dialog a capability with
+fields gets everywhere else in the window, not a bespoke prompt.
+
+A conversation can carry the pull request it is about: `chat.link_pr` records it
+(and the header shows it as a quiet link), and `chat.settle` is the record behind
+the shelf, so an agent, a script and the window agree on what is settled.
+
+## Putting a conversation aside
+
+Snoozing is not settling. Settling says the work is finished; snoozing says it can
+wait for a better hour. **Snooze for an hour** and **Snooze until tomorrow** in
+the conversation's menu (`chat.snooze`, human only) move it out of the working
+groups onto a **Snoozed** shelf, dimmed, with the time it comes back instead of
+how long ago it moved — "until 21:00", "until 09:00 tomorrow". It returns to the
+working list by itself when that time passes; no job runs, nothing is scheduled,
+the list simply asks a stored instant which side of now it is on. **Wake it now**
+clears it.
+
+The instant is stored, not a duration, and it is compared as a time rather than as
+text: a snooze set in another time zone is still a moment, and a client that opens
+the list an hour later has to agree with one that was already open. A time that has
+already passed is refused with the reason, and speaking to a snoozed conversation
+wakes it the way a message wakes a settled one — a message is the person asking
+for it now.
+
+## A conversation's own worktree
+
+Two pieces of work on one checkout tread on each other: a stash, a branch switch, a half-finished
+edit. A conversation can own a **worktree** of its project instead — a real branch
+(`devd/<conversation>`) in a real folder (`<project>/.devd/worktrees/<conversation>-chat`), in the
+same repository — so its changes cannot collide with anything else, and the project's folder stays
+as it was until someone merges the branch.
+
+- `chat.worktree` does it: `create` makes the worktree (or finds the one this conversation already
+  has), `attach` points the conversation at a folder that already exists, and `detach` puts it back
+  on the project. Detaching never deletes the folder or the branch, so nothing a conversation did is
+  lost by going back.
+- It is a person's decision. The window offers it beside the conversation's other actions; an agent
+  cannot move its own workspace.
+- The conversation's tools run in that folder — file reads and writes, `project.*`, and the
+  `git.*` calls the agent makes — because the harness hands every call the conversation's working
+  folder, not the project path. `AGENTS.md`, `devd.yml` and the project's own commands are read from
+  there.
+- The project stays the project: the sidebar still groups the conversation under it, the run still
+  records it, and `devd.self` reports the worktree as `current.workdir` so an agent can say where it
+  is instead of guessing.
+- A repository with no commit has nothing to branch from, so `create` is refused with that reason
+  rather than committing on the person's behalf.
+
+The folder is kept out of the project's status through `.git/info/exclude`, the same way the team's
+worktrees are, so `git status` in the project stays clean while a conversation works.
+
+Deleting the conversation takes an **empty** worktree with it: the folder and its branch go when
+there is nothing uncommitted and the branch is merged into the project's current branch. Anything
+else is left exactly where it is, and `chat.delete` says where and why — "its worktree was kept
+because it has changes that were never committed". Deleting a conversation is never a way to lose a
+change by accident. `chat.prune`, which deletes many at once, reports how many worktrees it kept.
+
+## Performance
+
+`perf.measure` answers "is devd still fast?" with numbers from this process rather than an adjective:
+opening and migrating the state database, writing 500 conversations, listing them, appending 500
+events to one log, and reading that conversation back. Each reading carries a budget, and the
+answer says whether it is inside it.
+
+Every reading is the **best of three runs**, because it is measured from a window that is also
+drawing and a server that is also serving: the minimum reports the work, an average reports the
+machine's mood.
+
+The window writes its own launch to `startup.json` beside the state on its first frame, and
+`perf.measure` reports it as two readings rather than one, because they are two waits:
+
+| Reading | Warm devd | Cold devd |
+|---|---|---|
+| **devd ready** — wait for a running devd, starting one if needed | ~150 ms | 4–6 s |
+| **window** — from there to the first frame | ~0.9 s debug | ~0.9 s debug |
+
+The split is why they are separate: a single number would say "devd takes six seconds", which is
+true only when nothing was running, and would hide the other five and a half seconds that no longer
+happen. Cold start is measured, visible on the Diagnostics screen, and was the next lever — the
+window used to open the store, migrate it and build the whole capability registry *before* asking
+whether a devd was already running, and then throw all of it away to attach. Now it only bootstraps
+on the path where it becomes the server:
+
+| Launch (debug build) | Before | After |
+|---|---|---|
+| Warm devd, window opens | 1.03 s | **0.75 s** (attach: 147 ms → 7 ms) |
+| No devd, one is started | 2.36 s | **1.85 s** |
+
+The daemon prints its own phase line when it starts — `devd started in 176 ms: paths 6 ·
+settings 5 · store 44 · launchers 0 · git 81 · capabilities 24 · agents 16` — so a slow start is a
+list rather than a mystery.
+
+What is left of a warm launch is the window toolkit itself, not devd's work. The launch record
+carries every phase, and on this machine it reads like this:
+
+| Phase | Debug build |
+|---|---|
+| Attach to the running devd | 9 ms |
+| Load the theme | 1 ms |
+| Application and platform start-up, and the agent runtime | 285 ms |
+| Window creation | 450 ms |
+| Building the shell | 1 ms |
+| First frame | 1 ms |
+
+Two experiments in this round tried to cut it and measured nothing: moving the spell-check
+dictionary to a background thread (the dictionary was never the cost — the time between the
+runtime and the first frame is window creation, and the measurement now says so) and reordering
+work inside the shell. Both were reverted rather than kept for looking plausible; the instrumentation
+that disproved them stayed.
+
+The budgets are **regression lines, not targets**: several times what the work costs on an ordinary
+machine, so a busy afternoon is not a failure and a change that makes the harness ten times slower
+is. The same readings run as a test, with a wider line so a loaded build machine does not fail the
+suite; a miss there is a regression worth explaining, not a verdict on the machine.
+
+```bash
+devd call perf.measure
+```
+
+One of the six readings is the **room**: four members' conversations, 150 events each, read the way
+the window reads them while a run is working. It is separate from the single conversation read
+because it is a different amount of work — four logs merged into one transcript, refreshed while the
+person watches.
+
+An agent can call it too: it is read-only, and it is the honest answer to "how fast are you" that
+does not depend on the model's opinion of itself. The same readings are on **Settings →
+Diagnostics → Speed**, each with its budget and whether it is inside it, so the question "is devd
+the problem?" is answered on the screen where a person asks it rather than in a terminal.
+
+## Shipping what a conversation did
+
+The loop from a change to a review has three steps, and each one is a real surface rather than a
+copy of one:
+
+1. **Review.** The **Changes** action in a conversation's header opens the project's own Git screen
+   on the folder the conversation works in — the worktree when it has one, the project otherwise.
+   Staging, per-file diffs, the commit message, pull and push are the same screen a person uses for
+   any project, so the two cannot drift. Each change in the list has a **read mark** — a dot in front
+   of it, hollow until it has been looked at — and a heading that says how far the review has got
+   ("Changes 2 · 1 read"). A change that has been read dims and steps back, so what has not been
+   read is what the eye finds first. A group's heading offers **Mark all read** — quiet, because
+   reading is not a change to the repository, and the staging button beside it should be the one the
+   eye lands on. The marks belong to the window's session: they are a review aid, not a record of
+   anything the host should remember.
+2. **Report.** `chat.changes` is the same fact as data: one entry per path with its status and
+   whether it is staged, the branch and its upstream, and how many commits are ahead or behind.
+   The window uses it to say what is waiting; an agent reads it before it says what it did.
+3. **Review the branch.** `chat.pr` opens the pull request a pushed branch becomes, through the
+   GitHub CLI, and links it to the conversation. A branch that has not been pushed is refused with
+   that reason: a review is of commits the host can see. Without a title the host fills the title
+   and body from the commits, so the review starts from what actually changed. It is remote, so a
+   person approves it, and the header then shows the pull request as a link.
+
+The branch is not forced on anyone: a conversation in the project's own folder can be reviewed and
+committed the same way, minus the isolation.
+
+The browser client carries the same three: the conversation's menu has **Review the changes**, the
+worktree toggle and **Open a pull request**, and its header shows the branch beside the linked
+review. It reads `chat.changes` when a conversation opens rather than on every poll, so the numbers
+in the header and the Git screen are the same ones the window uses.
 
 ## Deleting conversations, runs and messages
 

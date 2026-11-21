@@ -296,6 +296,33 @@ fn detection_weighs_evidence_and_admits_ambiguity() {
 }
 
 #[test]
+fn a_plain_node_project_is_not_reported_as_ambiguous() {
+    // Both projects built with devd on this machine are exactly this: a package.json, scripts that
+    // run node, ES modules, and no dependencies at all. Detection called that "only weak evidence
+    // for Node.js" and handed the planner a low-confidence stack.
+    let d = tempfile::tempdir().unwrap();
+    let reg = StackRegistry::builtin();
+    let ctx = ctx_with(d.path(), Actor::human(Surface::Cli));
+    let p = d.path().join("ledger");
+    std::fs::create_dir_all(&p).unwrap();
+    std::fs::write(
+        p.join("package.json"),
+        r#"{"name":"ledger","version":"0.1.0","type":"module","scripts":{"start":"node src/server.js","test":"node --test"}}"#,
+    )
+    .unwrap();
+    std::fs::write(p.join("src").join("server.js"), "export {};\n").ok();
+    let c = detect::detect(&ctx, reg, &p, None).unwrap();
+    assert_eq!(c.primary.as_deref(), Some("node"));
+    assert!(!c.ambiguous, "a manifest is not ambiguity: {:?}", c.ambiguity);
+    assert_ne!(
+        c.stacks.first().map(|s| s.confidence.clone()).as_deref(),
+        Some("low"),
+        "evidence: {:?}",
+        c.stacks.first().map(|s| s.evidence.clone())
+    );
+}
+
+#[test]
 fn package_manager_comes_from_evidence_not_a_default() {
     let d = tempfile::tempdir().unwrap();
     let reg = StackRegistry::builtin();

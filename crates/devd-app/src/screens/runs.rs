@@ -694,7 +694,14 @@ fn heading(
     }
     if let Some(turns) = budget["turns"].as_u64() {
         // The ceiling is shown even before the first turn, so what a run may spend is visible beside it.
-        facts.push(format!("{} of {turns} turns", usage["turns"].as_u64().unwrap_or(0)));
+        // A pause is decided between steps, so the task already running can take a few more turns
+        // before it stops. Say that: "254 of 250" reads as a counter that is broken.
+        let used = usage["turns"].as_u64().unwrap_or(0);
+        facts.push(if used > turns {
+            format!("{turns} of {turns} turns ({used} taken)")
+        } else {
+            format!("{used} of {turns} turns")
+        });
     } else if let Some(turns) = usage["turns"].as_u64().filter(|n| *n > 0) {
         facts.push(format!("{turns} turns"));
     }
@@ -830,6 +837,47 @@ fn attention(id: &str, run: &Value, data: &Value, cx: &mut Context<Shell>) -> Op
         return Some(line(t.warn, "Nothing is carrying this run. Its work is kept; carry it on to continue from where it stopped.".to_string(), Some(button.into_any_element())));
     }
     let error = run["error"].as_str().filter(|e| !e.is_empty())?;
+    // A run stopped at its budget cannot be resumed into progress: the next scheduler tick sees the
+    // same usage and pauses it again. Offer the ceiling, and raising it carries the run on by itself.
+    if run["state"] == "paused" && devd_core::runs::at_budget(error) {
+        let used_turns = data["usage"]["turns"].as_u64().unwrap_or(0);
+        let spent = data["usage"]["cost_usd"].as_f64().unwrap_or(0.0);
+        let limit_turns = data["budget"]["turns"].as_u64().unwrap_or(0);
+        let limit_usd = data["budget"]["usd"].as_f64().unwrap_or(0.0);
+        // Whichever ceiling stopped it is the one doubled. The other is sent back unchanged, because
+        // team.budget reads an omitted ceiling as "no ceiling" and would remove it.
+        let usd_hit = limit_usd > 0.0 && spent >= limit_usd;
+        let turns_hit = !usd_hit && limit_turns > 0;
+        let raise = id.to_string();
+        let button = Button::new("run.budget", "Raise the budget")
+            .icon("arrow-up")
+            .kind(ButtonKind::Primary)
+            .on_click(move |_, _, cx| {
+                let mut args = json!({ "run": raise });
+                if limit_usd > 0.0 {
+                    args["budget_usd"] = json!(if usd_hit {
+                        (limit_usd * 2.0).max(spent * 2.0)
+                    } else {
+                        limit_usd
+                    });
+                }
+                if limit_turns > 0 {
+                    args["max_turns"] = json!(if turns_hit {
+                        limit_turns.max(used_turns).saturating_mul(2).max(50)
+                    } else {
+                        limit_turns
+                    });
+                }
+                devd(cx).sync.mutate(
+                    Mutation::new("team.budget", args).invalidating("team"),
+                );
+            });
+        return Some(line(
+            t.warn,
+            error.to_string(),
+            Some(button.into_any_element()),
+        ));
+    }
     // A paused run is answered where it says why: resuming gives the task that stopped it another go.
     let resume = (run["state"] == "paused").then(|| {
         let again = id.to_string();

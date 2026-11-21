@@ -47,6 +47,9 @@ pub struct ProjectUi {
     file_lines: usize,
     /// The change shown in the diff: a path, and whether it is the staged side.
     change: Option<(String, bool)>,
+    /// Changes a person has read in this review, by path. A change that has been read is dimmed and
+    /// counted, so "what have I not looked at yet" is a glance rather than a memory.
+    read: HashSet<String>,
     /// The commit shown on the history tab.
     commit: Option<String>,
     /// The commit message being written.
@@ -347,6 +350,7 @@ fn view_of(shell: &Shell) -> ProjectView {
         file: u.file.clone(),
         file_lines: u.file_lines,
         change: u.change.clone(),
+        read: u.read.clone(),
         commit: u.commit.clone(),
         source: u.source,
         dirty: u.dirty,
@@ -369,6 +373,8 @@ struct ProjectView {
     file: Option<String>,
     file_lines: usize,
     change: Option<(String, bool)>,
+    /// Changes a person has read in this review.
+    read: HashSet<String>,
     commit: Option<String>,
     source: bool,
     dirty: bool,
@@ -463,6 +469,19 @@ fn git_row(dir: &str, tab: ProjectTab, is_repo: bool, cx: &mut Context<Shell>) -
 
 // ------------------------------------------------------------------------------------------ small parts
 
+/// What pressing a read mark does.
+type OnToggle = Box<dyn Fn(&mut Shell, &mut Context<Shell>)>;
+
+/// A change a person has read, or has not: the dot in front of it, and what pressing it does.
+struct ReadMark {
+    /// Whether it has been read.
+    read: bool,
+    /// The dot's own element id.
+    id: String,
+    /// What pressing the dot does.
+    on_toggle: OnToggle,
+}
+
 /// A list entry that can be selected, with actions at its right.
 #[allow(clippy::too_many_arguments)]
 fn pick_row(
@@ -471,6 +490,7 @@ fn pick_row(
     title: String,
     sub: String,
     selected: bool,
+    read: Option<ReadMark>,
     acts: Vec<(ElementId, Act)>,
     on_pick: impl Fn(&mut Shell, &mut Context<Shell>) + 'static,
     cx: &mut Context<Shell>,
@@ -491,6 +511,31 @@ fn pick_row(
     } else {
         line.hover(move |s| s.bg(hover))
     };
+    let mut read = read;
+    let already_read = read.as_ref().is_some_and(|r| r.read);
+    if let Some(mark) = read.take() {
+        // A dot rather than a tick: filled means read, hollow means not yet. It is the smallest
+        // thing that can be pressed, and it says "I have looked at this" in one bit.
+        let (fill, ring, hover_ring) = (t.faint, t.line_strong, t.muted);
+        let dot = div()
+            .id(ElementId::Name(mark.id.into()))
+            .w(px(14.0))
+            .h(px(14.0))
+            .flex_none()
+            .rounded(px(7.0))
+            .border_1()
+            .border_color(if mark.read { fill } else { ring })
+            .when(mark.read, move |s| s.bg(fill))
+            .cursor_pointer()
+            .hover(move |s| s.border_color(hover_ring))
+            .tooltip(ui::tip(if mark.read {
+                "Read: press to mark it unread"
+            } else {
+                "Mark it read"
+            }))
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| (mark.on_toggle)(this, cx)));
+        line = line.child(dot);
+    }
     if let Some((tone, w)) = word {
         line = line.child(
             div()
@@ -511,6 +556,9 @@ fn pick_row(
             div()
                 .min_w_0()
                 .text_size(px(size::TEXT))
+                // A change that has been read steps back: the unreviewed ones are what the eye
+                // should find first.
+                .text_color(if already_read { t.muted } else { t.text })
                 .child(ui::Clip::new(title)),
         )
         .child(
@@ -1596,12 +1644,24 @@ fn changes(
             }
             let key = path.clone();
             let id = ElementId::Name(format!("change:{}:{path}", is_staged as u8).into());
+            let seen = view.read.contains(path.as_str());
+            let mark_path = path.clone();
             list = list.child(pick_row(
                 id,
                 Some(change_word(st)),
                 leaf(path).to_string(),
                 parent(path).to_string(),
                 selected,
+                Some(ReadMark {
+                    read: seen,
+                    id: format!("change.read:{}:{path}", is_staged as u8),
+                    on_toggle: Box::new(move |this, cx| {
+                        if !this.project_ui.read.remove(&mark_path) {
+                            this.project_ui.read.insert(mark_path.clone());
+                        }
+                        cx.notify();
+                    }),
+                }),
                 acts,
                 move |this, cx| {
                     this.project_ui.change = Some((key.clone(), is_staged));
@@ -1614,6 +1674,10 @@ fn changes(
                 list = list.child(rule(cx));
             }
         }
+        let read_here = items
+            .iter()
+            .filter(|(path, _)| view.read.contains(path.as_str()))
+            .count();
         let head = div()
             .flex()
             .items_center()
@@ -1625,14 +1689,54 @@ fn changes(
                 div()
                     .text_size(px(size::TEXT_SM))
                     .font_weight(FontWeight::MEDIUM)
-                    .child(format!("{title}  {}", items.len())),
-            )
-            .child(act_button(
-                ElementId::Name(format!("change.all.{}", is_staged as u8).into()),
-                all,
-                ButtonKind::Ghost,
-                cx,
-            ));
+                    // "3 · 1 read": the group's size and how much of it has been looked at, so the
+                    // review's progress is in the heading rather than in a person's memory of it.
+                    .child(if read_here > 0 {
+                        format!("{title}  {} · {read_here} read", items.len())
+                    } else {
+                        format!("{title}  {}", items.len())
+                    }),
+            );
+        // The group's own review control: everything in it read, or nothing. "Stage all" stays
+        // beside it, because both are about the whole group.
+        let all_read = !items.is_empty() && read_here == items.len();
+        let targets: Vec<String> = items.iter().map(|(path, _)| path.clone()).collect();
+        let mut right = div().flex().items_center().gap(px(4.0));
+        if !items.is_empty() {
+            // Quieter than the git action beside it: reading is not a change to the repository, and
+            // the button that stages files should be the one the eye lands on.
+            let label_color = t.faint;
+            let hover_color = t.muted;
+            right = right.child(
+                div()
+                    .id(ElementId::Name(format!("change.read.all:{title}").into()))
+                    .px(px(6.0))
+                    .py(px(2.0))
+                    .rounded(px(4.0))
+                    .text_size(px(size::TEXT_XS))
+                    .text_color(label_color)
+                    .cursor_pointer()
+                    .hover(move |s| s.text_color(hover_color))
+                    .child(if all_read { "Mark all unread" } else { "Mark all read" })
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        for path in &targets {
+                            if all_read {
+                                this.project_ui.read.remove(path);
+                            } else {
+                                this.project_ui.read.insert(path.clone());
+                            }
+                        }
+                        cx.notify();
+                    })),
+            );
+        }
+        right = right.child(act_button(
+            ElementId::Name(format!("change.all.{}", is_staged as u8).into()),
+            all,
+            ButtonKind::Ghost,
+            cx,
+        ));
+        let head = head.child(right);
         Some(div().flex().flex_col().child(head).child(list))
     };
     let mut left = div().flex().flex_col();
@@ -1864,6 +1968,7 @@ fn history(dir: &str, view: &ProjectView, cx: &mut Context<Shell>) -> AnyElement
                 when
             ),
             selected,
+            None,
             vec![],
             move |this, cx| {
                 this.project_ui.commit = Some(key.clone());

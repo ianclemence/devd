@@ -10,6 +10,256 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.40.0] - 2026-11-20 - A project is offered a run
+
+### Added
+
+- **`runs::suggests_team`**: whether a message is the *shape of a project* - it opens with
+  build/create/implement/develop/make/write/clone/scaffold/port/rewrite and names a thing (app,
+  site, api, service, clone, dashboard, cli, engine, pipeline, system, tool). It is the evidence
+  for offering a run, never for starting one: `classify` is unchanged, so nothing spends money on
+  a guess.
+- **`chat.suggest_mode`**: a read-only capability that answers `{kind, suggest_team}` for a message
+  before it is sent, so an interface can ask instead of deciding.
+- **The web composer offers it**: a first message that reads like a whole project asks *"This looks
+  like a team job - start a run and let the planner propose a plan?"* and starts one only if the
+  person says yes; otherwise it is sent as a conversation exactly as before.
+
+Why: a real project request ("Build "Kata" ... an app written in Rust") matched none of the
+"have the team ..." phrases, so it became a single conversation - 7.25 million input tokens in one
+context, no plan, no worktree, no verdict. The same project as a run finished with 8 tasks, 84
+passing tests and a reviewer's approve.
+
+---
+
+## [0.39.9] - 2026-11-20 - The thought behind a click
+
+### Fixed
+
+- **Reasoning is no longer streamed into the status line.** It showed the last 280 characters of
+  the stream beside "Thinking" - beginning and ending mid-word, markdown and line breaks and all.
+  The line now says only "Thinking", and a "Thinking" control above it opens the whole thought for
+  the turn underneath, scrollable, and closes again when clicked. Nothing of it is shown until the
+  person asks, which is how the assistants people already use behave.
+- **A refused call reads as a sentence.** A capability with no phrase of its own produced "Could
+  not stacks: Describe" - a domain label where a verb belongs. It now reads "Could not run
+  stacks.describe", and stacks.describe, stacks.list and stacks.validate have phrases of their own.
+
+---
+
+## [0.39.8] - 2026-11-20 - A bill is not a failure
+
+A run stopped because the provider answered `402 Insufficient Balance` three times. The task was
+marked failed, the run paused, and finishing it took a person noticing a top-up, restarting the
+daemon and retrying the task by hand.
+
+### Fixed
+
+- **An account without credit is a bill, not a failed task.** A billing refusal is recognised by
+  its own words (`out of credit`, `insufficient balance`, `HTTP 402`, `needs billing`, quota) and
+  the task goes back to `pending` with **no attempt spent**, held for a minute so the scheduler is
+  not a request storm against an account that cannot answer. The run records `needs_credit` with
+  the reason and the interval, and tells the requester the work is kept. When the balance returns,
+  the next start works and the run finishes by itself.
+
+The distinction is who can fix it: a network is retried by devd, a work failure by the agent inside
+its task, and a bill by a person - but the retry stays automatic, so nobody has to come back and
+press a button.
+
+---
+
+## [0.39.7] - 2026-11-20 - What the third project taught
+
+A durable job queue was built by the team while it was being watched, and the watching found
+five more seams.
+
+### Fixed
+
+- **A working run extends its own ceiling once.** A run that reached its turn ceiling with
+  active tasks and no failed task paused and waited for a person to press raise. It now gets
+  half as many turns again (at least 40), recorded as `budget_extended`; the second ceiling
+  stops it as before, and the dollar ceiling is untouched.
+- **A task that has read enough is told to act.** One QA task reached 634,417 input tokens
+  writing two test files, most of it re-reading a tree it had already seen; the only guard
+  fired at 600k. At 200k a task is now told once, in words, to stop reading and spend what it
+  knows. The 600k wrap-up is unchanged and remains the hard stop.
+- **A QA task that writes tests gets its own copy, scope or no scope.** The isolation rule
+  keyed on the task's scope, and a planner that gives QA no scope does not stop QA writing
+  tests into the shared tree - which is the tree every merge lands on. QA is now treated as a
+  member that leaves files, except when the task is the run's own verification.
+- **A review of a change does not demand a change of its own.** A task opening with review,
+  re-review, audit, inspect or assess asks for a judgement: no change, no verification.
+- **Completion reasons name the work.** "page is still running" became the task's own title,
+  quoted, because a person reads those reasons.
+
+---
+
+## [0.39.6] - 2026-11-20 - A review is not the work it reviews
+
+A request opening with review, re-review, audit, inspect or assess now asks for a judgement: no
+change and no verification, because that is what a reviewer's proof is. Before, the word "change"
+inside a review's title made the classifier demand a passing check from a role whose entire job is
+to read the diff and say what it found. A request that opens with the change itself still demands
+both.
+
+---
+
+## [0.39.5] - 2026-11-20 - Coherence
+
+The seams between subsystems, where each part held a piece of the truth.
+
+### Fixed
+
+- **A capability takes exactly the arguments it declares.** `turns` where the capability wanted
+  `max_turns` was accepted silently: the answer said "Budget set" and the ceiling had been
+  removed. Every capability now closes its schema, and the refusal names the arguments it takes.
+- **A network failure no longer uses up a task's attempts.** Three provider stops in a row marked
+  a nearly finished task failed and paused its run. Provider failures are retried under their own
+  budget, eight deep, without touching the task's three.
+- **The release is gated on the tests.** `crates/devd-cli/tests/version.rs` had been failing since
+  0.38.0 — `tauri.conf.json` said 0.38.0 while the workspace said 0.39.4 — because the release
+  workflow only built and `ci.yml` does not run on feature branches. The release now has a test
+  job that windows, macos and linux all need, and the desktop version is current.
+- **A package.json is evidence, not a weak guess.** A plain Node project — manifest, scripts that
+  run node, ES modules — was reported as "only weak evidence for Node.js"; the manifest's own
+  contents now count towards the score.
+
+---
+
+## [0.39.4] - 2026-11-20 - What a real run found
+
+A team run on a fresh project (`pulse`, a small Node status board) was followed from the
+first plan to the last check, with every tool call recorded. It finished the work, and the
+harness had six things to learn from the way it did.
+
+### Fixed
+
+- **A recovered task no longer keeps the run from finishing.** A task that stopped once and
+  then finished still carried `failure_kind`, and its stale stop was cited as the reason a
+  run whose every task was done and whose gatekeeper approved was marked `changes_needed`.
+  Completion cites a stop only while the task is unfinished.
+- **A message a one-shot command leaves behind is answered.** `devd call chat.send` writes
+  the person's message and the run, then exits; the process that owns the agents never saw
+  it, and the thread sat at `running` with nobody driving it while the command said "the
+  agent is working". The host now picks that case up on its own, every three seconds.
+- **A member that may write only some files gets its own copy.** A QA task holding a test
+  file worked in the project's tree, and its uncommitted edits refused another member's
+  finished branch at merge time. A task with a non-empty scope is treated like a writer.
+- **A blocked merge unsticks itself.** Once nothing else is writing and the tree is clean,
+  the scheduler retries a task that was blocked on a dirty tree, instead of leaving a
+  finished task waiting for a person to notice.
+- **A project check run by hand counts as a verification.** `project.exec` with `npm test`
+  (or cargo, go, node --test, pytest, dotnet, mvn, gradle, make, mix, php artisan,
+  composer) is recorded as verification, matching argv exactly and never a shell string.
+  Before, only `project.run` counted, and a member with twelve green tests was rejected.
+- **A member can stop what it started.** `project.status` and `project.stop` are available
+  to every role, so a server run to look at the work does not outlive the task.
+
+### Added
+
+- **`devd call --args-file <path>`**, because a JSON object cannot survive a Windows
+  command line: the quotes that make it JSON are the ones the argument parser strips.
+
+---
+
+## [0.39.3] - 2026-11-20 - One name, one line
+
+### Fixed
+
+- **A run's conversation is named by its goal when the run starts**, so the
+  breadcrumb, the list and the header agree. The title was generated when the
+  conversation was made — "A team run (id 6548ec1b-…) is already running" — which
+  is a database key wearing a sentence. A title a person chose is left alone; only
+  the generated one is replaced.
+- **A run of edits is one line.** Three "Changed 1 file — Undo" rows for three
+  edits read as history nobody asked for; consecutive change rows now merge, each
+  file keeping its latest state, and Undo still takes back the most recent change.
+
+---
+
+## [0.39.2] - 2026-11-20 - The room's name, in the list
+
+### Fixed
+
+- **A conversation that started a run is named by the run's goal in the sidebar**,
+  not only in its header. 0.39.1 changed the header and the list still said
+  "A team run (id 6548ec1b-…)", because a room's own row does not always carry
+  which run it belongs to: the list now finds the run the same two ways the header
+  does.
+
+---
+
+## [0.39.1] - 2026-11-20 - The room, corrected
+
+0.39.0 made a run one conversation. Reading it back from a real run found the
+seam: a *member's* conversation had become the room too.
+
+### Fixed
+
+- **The room is the conversation the run was started from.** A specialist's own
+  conversation keeps its task, its branch and its own turns, and offers **In the
+  room** to jump to the conversation the team shares. Before, opening Backend's
+  chat showed you what Implementer said — three identities on one screen.
+- **`chat.team_log` reports the origin honestly.** A run started by a command has
+  no origin conversation; the read used to return the thread it was asked from as
+  the origin, which made every specialist look like the room.
+- **A conversation that started a run is named by the run's goal in the list**,
+  not only in its header: "A team run (id 6548ec1b-…)" was a database key wearing
+  a sentence, and one conversation had two names.
+- **Consecutive messages from one member share one heading**, the way a group chat
+  reads. A tool line between them does not repeat the name; another member
+  speaking does.
+- **A failed step wraps.** The reason a step failed is the one line that must be
+  whole; it was cut at the column's edge.
+- **The line saying what is running wraps**, so the test that is taking seven
+  minutes is readable.
+- **"A message sent now is read at its next step"** — the queued-message hint said
+  "A message now is read at its next step".
+
+---
+
+## [0.39.0] - 2026-11-19 - The team is one conversation
+
+A run used to be one private conversation per specialist. To see what the team
+was doing you opened each one, and the conversation you started the run from
+only heard single-line notices. A run is now a room.
+
+### Added
+
+- **`chat.team_log` reads a run as one conversation.** The person's messages, the
+  planner's and every specialist's, tagged with the role that said them and
+  interleaved in the order they happened, from any conversation of the run. It is
+  a read, not a copy: the per-specialist logs stay where they are.
+- **`chat.talk` is speech in that room.** `to` addresses a member, `about` names
+  the task, and both stay with the message. The speaker is derived from the
+  conversation the call came from, and an address to a role the run does not have
+  is refused with the roles it does have.
+- **An addressed message is delivered**, queued into that member's own
+  conversation, so it reads the question at its next step and can answer in the
+  room. The run's budget bounds a conversation between agents, not the harness
+  refusing to deliver.
+- **Every member's brief says the room exists**, on the first attempt and on
+  every restart, so a member that can be heard knows it can speak.
+- **The window's conversation is the room**: one transcript, a bubble per speaker
+  with its own face, name and stable colour, an addressed message as its own
+  block with `@role`, a header titled with the run's goal over its state and
+  roster, and a member's name as the way into that member's own conversation.
+- **The browser client reads the same room**, with the speaker taken from the
+  event rather than from the conversation, the run's roster in its header, and a
+  composer that steers the run.
+- **`perf.measure` has a reading for a room**: four members' conversations, 150
+  events each, as the window reads them while a run works.
+
+### Fixed
+
+- **A room opens on what is happening, not on the first day.** `chat.team_log`
+  read each conversation forward from its first event, so a run longer than the
+  limit came back as its oldest messages and the newest were never shown.
+- **Notices wrap.** A long notice in a transcript ran off the right edge instead
+  of wrapping inside the column.
+
+---
+
 ## [0.38.0] - 2026-11-18 - The agent knows itself
 
 ### Added

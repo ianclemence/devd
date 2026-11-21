@@ -582,6 +582,43 @@ impl Hub {
         })
     }
 
+    /// A message a one-shot command recorded, which nothing was left to answer.
+    ///
+    /// `devd call chat.send` runs in its own process: it writes the person's message and the run,
+    /// then exits. The process that owns the agents was already going, so it never saw the
+    /// conversation start, and the thread sat at `running` with nobody driving it — while the
+    /// command had said "the agent is working". A conversation whose state says running, which
+    /// this process is not running, and whose newest event is something the person said, is owed
+    /// an answer, so the host picks it up here instead of waiting for a restart.
+    pub fn pick_up_stranded(self: &Arc<Self>) -> usize {
+        let mut started = 0;
+        let Ok(threads) = self.ctx.store.list_threads(200) else {
+            return 0;
+        };
+        for t in threads.into_iter().filter(|t| t.state == "running") {
+            if self.is_running(&t.id) {
+                continue;
+            }
+            let Ok(events) = self.ctx.store.tail_events(&t.id, 1) else {
+                continue;
+            };
+            let Some(last) = events.last() else { continue };
+            // Only what the person said. devd's own reminders (a gate, a goal step, a drawing it
+            // sent back) are not a message waiting for an answer.
+            let from_person = last.kind == "user"
+                && last.data["gate"] != json!(true)
+                && last.data["goal"] != json!(true)
+                && last.data["drawing"] != json!(true);
+            if !from_person {
+                continue;
+            }
+            self.deliver_queued(&t.id).unwrap_or(0);
+            self.spawn(&t.id);
+            started += 1;
+        }
+        started
+    }
+
     /// Conversations that were running when devd last stopped are not. Only the
     /// process that owns the agents (see [`crate::host`]) may call this.
     pub fn reconcile(self: &Arc<Self>) {
@@ -813,6 +850,15 @@ impl Hub {
                     .store
                     .get_thread(id)?
                     .ok_or_else(|| DevdError::not_found(format!("no conversation `{id}`")))?;
+                // Speaking to a settled conversation is activity: it comes back into the working
+                // list, where the person just put it, rather than running out of sight on the shelf.
+                if t.settled_at.is_some() {
+                    self.ctx.store.set_thread_settled(id, false)?;
+                }
+                // The same for a snoozed one: a message is the person asking for it now.
+                if t.snoozed_until.is_some() {
+                    self.ctx.store.set_thread_snooze(id, None)?;
+                }
                 // A conversation that is working (or waiting on a person) accepts a message and
                 // keeps it for the next step. It is not appended to the log yet: a user message
                 // between a tool call and its result would break the sequence the model requires.
@@ -1341,8 +1387,16 @@ impl Hub {
             "{{SELF}}",
             &crate::selfmodel::prompt(&self.ctx, self.registry().ok().map(|r| r.as_ref())),
         );
+        // Where this conversation's files are, when it is not the project's own folder: said once,
+        // plainly, so the agent never has to infer it from a path in a tool result.
+        let in_worktree = match t.workdir.as_deref() {
+            Some(dir) => format!(
+                "\n\n## Where this work is\n\nThis conversation owns a worktree of the project at `{dir}`, on a branch of its own. Everything it changes is there, and the project's own folder stays as it was until someone merges the branch. Git operations that matter (status, diff, commit, push) belong to that folder."
+            ),
+            None => String::new(),
+        };
         format!(
-            "{prompt}\n{COMMON_CALLS}\n\n{}{drawing}\n\n## Skills\n{}\n## Context\nToday is {}.\n{}\n{}{}",
+            "{prompt}\n{COMMON_CALLS}\n\n{}{in_worktree}{drawing}\n\n## Skills\n{}\n## Context\nToday is {}.\n{}\n{}{}",
             crate::skills::CORE,
             crate::skills::index_for(&self.ctx.paths, None),
             &util::now()[..10],
@@ -1376,6 +1430,13 @@ impl Hub {
             .get_thread(tid)?
             .ok_or_else(|| DevdError::not_found("the conversation was deleted"))?;
         let thread_project = thread.project.clone();
+        // Where this conversation's tools actually run: its own worktree when it has one, and the
+        // project's folder otherwise. The project stays the project for the record and the sidebar.
+        let thread_workdir = thread
+            .workdir
+            .clone()
+            .filter(|w| std::path::Path::new(w).is_dir())
+            .or_else(|| thread_project.clone());
         let run = self.ensure_run_for(&thread)?;
         let run_id = run.id.clone();
         let (tools, external, direct, hooks, failures) = tool_specs(&self.ctx, &registry);
@@ -1458,11 +1519,11 @@ impl Hub {
             let mut mcp_ctx = self.ctx.clone();
             mcp_ctx.run = Some(run_ctx.clone());
             let mcp = McpServer::new(registry.clone(), mcp_ctx, "devd-agent")
-                .with_project(thread_project.clone())
+                .with_project(thread_workdir.clone())
                 .with_permission(permission.clone());
             let events = self.ctx.store.list_events(tid, 0, 100_000)?;
             let system = match &binding {
-                Some(b) => format!("{}\n\n{COMMON_CALLS}\n\n{}\n\n## Skills for your role\nLoad one with devd_invoke skills.get before you start the work it covers.\n{}{}", crate::team::system_prompt(&self.ctx, b), crate::skills::CORE, crate::skills::index_for(&self.ctx.paths, Some(&b.role)), context::instructions_text(thread_project.as_deref())),
+                Some(b) => format!("{}\n\n{COMMON_CALLS}\n\n{}\n\n## Skills for your role\nLoad one with devd_invoke skills.get before you start the work it covers.\n{}{}", crate::team::system_prompt(&self.ctx, b), crate::skills::CORE, crate::skills::index_for(&self.ctx.paths, Some(&b.role)), context::instructions_text(thread_workdir.as_deref())),
                 None => self.system_prompt(&thread),
             };
             let model_hint = candidates
@@ -2120,7 +2181,17 @@ impl Hub {
             if !input["args"].is_object() {
                 input["args"] = json!({});
             }
-            input["args"]["task"] = json!(task.id);
+            // The task is supplied by the harness, never by the model — but only where the
+            // capability declares it: a capability that takes no task would refuse the call for an
+            // argument it never asked for, which reads to the model as a bug in its own call.
+            let declares_task = cap
+                .args_schema
+                .get("properties")
+                .and_then(|p| p.as_object())
+                .is_some_and(|p| p.contains_key("task"));
+            if declares_task {
+                input["args"]["task"] = json!(task.id);
+            }
         }
         if role.id != "planner" {
             if let Some(work) = &task.workdir {
@@ -2836,6 +2907,70 @@ mod tests {
             run: None,
             dry_run: false,
         }
+    }
+
+    #[test]
+    fn a_message_to_a_settled_conversation_brings_it_back_to_the_working_list() {
+        let ctx = test_ctx("settle");
+        let hub = Hub::new(ctx.clone());
+        let thread = hub
+            .ctx
+            .store
+            .create_thread("settle", None, None, None)
+            .unwrap();
+        hub.ctx.store.set_thread_settled(&thread.id, true).unwrap();
+        hub.ctx
+            .store
+            .set_thread_state(&thread.id, "running", None)
+            .unwrap();
+        hub.send(
+            &ctx,
+            SendRequest {
+                thread_id: Some(thread.id.clone()),
+                message: "one more thing".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let after = hub.ctx.store.get_thread(&thread.id).unwrap().unwrap();
+        assert!(
+            after.settled_at.is_none(),
+            "speaking to a settled conversation reopens it instead of running out of sight"
+        );
+    }
+
+    #[test]
+    fn a_message_to_a_snoozed_conversation_wakes_it() {
+        let ctx = test_ctx("snooze");
+        let hub = Hub::new(ctx.clone());
+        let thread = hub
+            .ctx
+            .store
+            .create_thread("snooze", None, None, None)
+            .unwrap();
+        let until = (chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339();
+        hub.ctx
+            .store
+            .set_thread_snooze(&thread.id, Some(&until))
+            .unwrap();
+        hub.ctx
+            .store
+            .set_thread_state(&thread.id, "running", None)
+            .unwrap();
+        hub.send(
+            &ctx,
+            SendRequest {
+                thread_id: Some(thread.id.clone()),
+                message: "now is the time".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let after = hub.ctx.store.get_thread(&thread.id).unwrap().unwrap();
+        assert!(
+            after.snoozed_until.is_none(),
+            "a message is the person asking for it now, so a snoozed conversation wakes"
+        );
     }
 
     #[test]

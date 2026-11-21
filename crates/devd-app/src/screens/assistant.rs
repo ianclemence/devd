@@ -23,6 +23,7 @@ use gpui::{
 use serde_json::{Value, json};
 
 use crate::shell::Shell;
+use crate::screens::modal::{Field, FormSpec};
 use crate::state::{devd, q};
 use crate::theme::{Tone, mono, size, theme};
 use crate::ui::{self, Button, ButtonKind, eyebrow, icon, live_dot, markdown as md};
@@ -33,7 +34,26 @@ pub enum Item {
     /// What the person wrote. `pending` until devd has stored it.
     You { text: String, pending: bool },
     /// What devd wrote, parsed for drawing.
-    Devd { blocks: Vec<Block>, model: String },
+    ///
+    /// `role` is who said it when the conversation is a team room: `implementer`, `reviewer`, or
+    /// nothing when it is the assistant itself. The room draws a name over each bubble, the way a
+    /// group chat does, so the reader knows who is speaking without opening a conversation per agent.
+    Devd {
+        blocks: Vec<Block>,
+        model: String,
+        role: Option<String>,
+        /// Whether this is a teammate's turn rather than the assistant's: it is drawn as a bubble.
+        bubble: bool,
+        /// The conversation it was said in, when the item came from a room's merged log.
+        thread: Option<String>,
+    },
+    /// A message said in a team room, by an agent to the room or to one teammate.
+    Said {
+        from: String,
+        to: Option<String>,
+        about: Option<String>,
+        text: String,
+    },
     /// A tool call as the model made it and, once it has one, its result.
     /// It is put into words when it is drawn, because the words depend on how it ended.
     Tool {
@@ -61,10 +81,15 @@ pub fn fold(events: &[Value], pending: &[&str], running: bool) -> Vec<Item> {
     let mut items: Vec<Item> = Vec::new();
     // Where each tool call landed, so its result can be attached to it.
     let mut calls: HashMap<String, usize> = HashMap::new();
+    // Who spoke last, so consecutive messages from one member collapse under one heading the way a
+    // group chat does. A tool line between them does not change who is talking; another member
+    // speaking, or the person writing, does.
+    let mut speaker: Option<String> = None;
     // Output tokens, cost and time of the model's replies since the person last spoke.
     let mut turn: (u64, f64, u64) = (0, 0.0, 0);
     for event in events {
         let data = &event["data"];
+        let data_event_id = event["id"].as_i64().unwrap_or_default();
         if event["kind"] == "user" && data["gate"] != json!(true) && data["drawing"] != json!(true) && data["goal"] != json!(true) {
             turn = (0, 0.0, 0);
         }
@@ -97,6 +122,13 @@ pub fn fold(events: &[Value], pending: &[&str], running: bool) -> Vec<Item> {
                 text: data["text"].as_str().unwrap_or_default().to_string(),
                 pending: data["pending"] == json!(true),
             }),
+            // A message said in the room: an agent to the room, or to one teammate about a task.
+            "agent" => items.push(Item::Said {
+                from: data["from"].as_str().unwrap_or("devd").to_string(),
+                to: data["to"].as_str().map(str::to_string),
+                about: data["about"].as_str().map(str::to_string),
+                text: data["text"].as_str().unwrap_or_default().to_string(),
+            }),
             "assistant" => {
                 // What the turn has cost so far: the label under its last words carries the whole turn.
                 turn.0 += data["usage"]["output"].as_u64().unwrap_or(0);
@@ -108,9 +140,19 @@ pub fn fold(events: &[Value], pending: &[&str], running: bool) -> Vec<Item> {
                         "text" => {
                             let text = block["text"].as_str().unwrap_or_default();
                             if !text.trim().is_empty() {
+                                let role = event["role"].as_str().map(str::to_string);
+                                let heading = role.is_some() && speaker != role;
+                                speaker = role.clone();
                                 items.push(Item::Devd {
                                     blocks: markdown::parse(text),
                                     model: model.clone(),
+                                    role: if heading { role } else { None },
+                                    // A teammate's turn is a bubble even when its heading is folded
+                                    // into the one above it.
+                                    bubble: event["role"].is_string(),
+                                    // The conversation it was said in, so a bubble in a room can
+                                    // open the specialist's own log when it is pressed.
+                                    thread: event["thread_id"].as_str().map(str::to_string),
                                 });
                             }
                         }
@@ -141,18 +183,35 @@ pub fn fold(events: &[Value], pending: &[&str], running: bool) -> Vec<Item> {
                     *detail = result_line(text, failed);
                 }
             }
-            "changes" => items.push(Item::Changes {
-                event: event["id"].as_i64().unwrap_or_default(),
-                files: data["files"]
+            // A run of edits is one line, not one line per edit: consecutive change rows are
+            // merged into the row above, each file keeping its latest state. Three "Changed 1 file"
+            // rows in a row read as history nobody asked for; what a person wants is the shape of
+            // what the turn has touched, and Undo still takes back the most recent one.
+            "changes" => {
+                let files: Vec<(String, String)> = data["files"]
                     .as_array()
                     .map(|f| {
                         f.iter()
                             .map(|c| (c["status"].as_str().unwrap_or("M").to_string(), c["path"].as_str().unwrap_or_default().to_string()))
                             .collect()
                     })
-                    .unwrap_or_default(),
-                undone: false,
-            }),
+                    .unwrap_or_default();
+                if let Some(Item::Changes { event, files: seen, .. }) = items.last_mut() {
+                    for (status, path) in files {
+                        match seen.iter_mut().find(|(_, seen)| *seen == path) {
+                            Some(slot) => slot.0 = status,
+                            None => seen.push((status, path)),
+                        }
+                    }
+                    *event = (*event).max(data_event_id);
+                } else {
+                    items.push(Item::Changes {
+                        event: data_event_id,
+                        files,
+                        undone: false,
+                    });
+                }
+            }
             "undone" => {
                 let which = data["event"].as_i64();
                 for item in items.iter_mut() {
@@ -446,10 +505,18 @@ fn sidebar(current: Option<&str>, cx: &mut Context<Shell>) -> impl IntoElement {
         .collect();
     // What the person pinned is at the top, under a heading of its own, in the order it was pinned.
     own.sort_by_key(|th| th["pinned_at"].as_str().map(|at| (0, at.to_string())).unwrap_or((1, String::new())));
+    // Working conversations first, in their project's group. Snoozed work has its own shelf, and
+    // settled work the last one: both are out of the way, still one click from being opened, and
+    // never mixed into active work.
+    let (mut snoozed, rest): (Vec<&Value>, Vec<&Value>) = own
+        .into_iter()
+        .partition(|th| snoozed_now(th));
+    snoozed.sort_by(|a, b| a["snoozed_until"].as_str().cmp(&b["snoozed_until"].as_str()));
+    let (mut settled, working): (Vec<&Value>, Vec<&Value>) =
+        rest.into_iter().partition(|th| th["settled_at"].is_string());
+    settled.sort_by(|a, b| b["settled_at"].as_str().cmp(&a["settled_at"].as_str()));
     let mut last_project: Option<String> = None;
-    for thread in own {
-        let id = thread["id"].as_str().unwrap_or_default().to_string();
-        // A conversation with no project is listed without a heading; a heading says which project the ones under it are about.
+    for thread in working {
         let project = if thread["pinned_at"].is_string() {
             Some("Pinned".to_string())
         } else {
@@ -467,75 +534,47 @@ fn sidebar(current: Option<&str>, cx: &mut Context<Shell>) -> impl IntoElement {
             }
             last_project = project;
         }
-        let state = thread["state"].as_str().unwrap_or_default();
-        let said = devd_app_core::status::of(state);
-        // A conversation at rest has no mark: the list is quiet until something needs a look.
-        let marker: AnyElement =
-            if said.label.is_empty() || said.level == devd_app_core::status::Level::Neutral {
-                div().size(px(7.0)).flex_none().into_any_element()
-            } else {
-                ui::state_mark(
-                    gpui::ElementId::Name(
-                        format!("thread.live.{}", thread["id"].as_str().unwrap_or_default()).into(),
-                    ),
-                    &said,
-                    cx,
-                )
-            };
-        let go = id.clone();
-        let (doomed, doomed_title, was_open) = (
-            id.clone(),
-            thread["title"]
-                .as_str()
-                .unwrap_or("this conversation")
-                .to_string(),
-            current == Some(id.as_str()),
-        );
+        column = column.child(thread_row(thread, current, false, false, cx));
+    }
+    if !snoozed.is_empty() {
+        let count = snoozed.len();
         column = column.child(
-            ui::row(
-                gpui::ElementId::Name(format!("thread.{id}").into()),
-                current == Some(id.as_str()),
-                cx,
-            )
-            .group("thread.row")
-            .h(px(34.0))
-            .child(marker)
-            .child(
-                div().flex_1().min_w_0().child(ui::Clip::new(
-                    thread["title"]
-                        .as_str()
-                        .unwrap_or("Conversation")
-                        .to_string(),
+            div()
+                .px(px(10.0))
+                .pt(px(14.0))
+                .pb(px(4.0))
+                .child(eyebrow(
+                    if count == 1 {
+                        "SNOOZED".to_string()
+                    } else {
+                        format!("SNOOZED · {count}")
+                    },
+                    cx,
                 )),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .text_size(px(size::TEXT_XS))
-                    .text_color(t.faint)
-                    .child(ui::ago(thread["updated_at"].as_str().unwrap_or_default())),
-            )
-            .child(ui::row_action(
-                gpui::ElementId::Name(format!("thread.delete.{id}").into()),
-                "thread.row",
-                "trash",
-                "Delete conversation",
-                true,
-                cx.listener(move |this, _: &ClickEvent, window, cx| {
-                    this.delete_conversation(
-                        doomed.clone(),
-                        doomed_title.clone(),
-                        was_open,
-                        window,
-                        cx,
-                    )
-                }),
-                cx,
-            ))
-            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                this.go(Route::Assistant(Some(go.clone())), cx)
-            })),
         );
+        for thread in snoozed {
+            column = column.child(thread_row(thread, current, true, true, cx));
+        }
+    }
+    if !settled.is_empty() {
+        let count = settled.len();
+        column = column.child(
+            div()
+                .px(px(10.0))
+                .pt(px(14.0))
+                .pb(px(4.0))
+                .child(eyebrow(
+                    if count == 1 {
+                        "SETTLED".to_string()
+                    } else {
+                        format!("SETTLED · {count}")
+                    },
+                    cx,
+                )),
+        );
+        for thread in settled {
+            column = column.child(thread_row(thread, current, true, false, cx));
+        }
     }
     let clear = div().flex_none().p(px(8.0)).border_t_1().border_color(t.line).child(
         Button::new("threads.clear", "Clear finished").icon("trash").kind(ButtonKind::Ghost).on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
@@ -584,6 +623,396 @@ fn sidebar(current: Option<&str>, cx: &mut Context<Shell>) -> impl IntoElement {
                 .child(column),
         )
         .child(clear)
+}
+
+/// One conversation in the list.
+///
+/// A parked conversation — settled or snoozed — reads as parked: dimmer, never live, and with the
+/// same actions, because a parked conversation can still be opened, woken or deleted. A snoozed one
+/// says when it comes back instead of how long ago it moved.
+fn thread_row(
+    thread: &Value,
+    current: Option<&str>,
+    parked: bool,
+    snoozed: bool,
+    cx: &mut Context<Shell>,
+) -> AnyElement {
+    let t = theme(cx).clone();
+    let id = thread["id"].as_str().unwrap_or_default().to_string();
+    let said = devd_app_core::status::of(thread["state"].as_str().unwrap_or_default());
+    let marker: AnyElement =
+        if parked || said.label.is_empty() || said.level == devd_app_core::status::Level::Neutral {
+            div().size(px(7.0)).flex_none().into_any_element()
+        } else {
+            ui::state_mark(
+                gpui::ElementId::Name(format!("thread.live.{id}").into()),
+                &said,
+                cx,
+            )
+        };
+    let go = id.clone();
+    let (doomed, doomed_title, was_open) = (
+        id.clone(),
+        thread["title"]
+            .as_str()
+            .unwrap_or("this conversation")
+            .to_string(),
+        current == Some(id.as_str()),
+    );
+    // A conversation that started a run is named by what the run is for, in the list as well as in
+    // its header: "A team run (id 6548ec1b-…)" is a database key wearing a sentence, and the same
+    // conversation must not have two names in two places. A member's own conversation keeps its
+    // task's title. The run is found the same two ways `run_of` finds it, because a room's own row
+    // does not always carry which run it belongs to.
+    let run_here = thread["team"]["run"]
+        .as_str()
+        .map(str::to_string)
+        .or_else(|| {
+            devd(cx)
+                .sync
+                .watch(&q::runs())
+                .list("")
+                .iter()
+                .find(|r| r["thread_id"].as_str() == Some(id.as_str()))
+                .and_then(|r| r["id"].as_str().map(str::to_string))
+        });
+    let title = match (run_here, thread["team"]["role"].as_str()) {
+        (Some(run), None) => devd(cx)
+            .sync
+            .watch(&q::runs())
+            .list("")
+            .iter()
+            .find(|r| r["id"].as_str() == Some(run.as_str()))
+            .and_then(|r| r["goal"].as_str())
+            .map(|goal| {
+                let short: String = goal.chars().take(48).collect();
+                if short.len() < goal.len() { format!("{short}…") } else { short }
+            })
+            .unwrap_or_else(|| thread["title"].as_str().unwrap_or("Conversation").to_string()),
+        _ => thread["title"]
+            .as_str()
+            .unwrap_or("Conversation")
+            .to_string(),
+    };
+    ui::row(
+        gpui::ElementId::Name(format!("thread.{id}").into()),
+        current == Some(id.as_str()),
+        cx,
+    )
+    .group("thread.row")
+    .h(px(34.0))
+    .child(marker)
+    .child(
+        div()
+            .flex_1()
+            .min_w_0()
+            .text_color(if parked { t.muted } else { t.text })
+            .child(ui::Clip::new(title)),
+    )
+    .child(
+        div()
+            .flex_none()
+            .text_size(px(size::TEXT_XS))
+            .text_color(t.faint)
+            .child(if snoozed {
+                ui::due_at(thread["snoozed_until"].as_str().unwrap_or_default())
+            } else {
+                ui::ago(thread["updated_at"].as_str().unwrap_or_default())
+            }),
+    )
+    .child(ui::row_action(
+        gpui::ElementId::Name(format!("thread.delete.{id}").into()),
+        "thread.row",
+        "trash",
+        "Delete conversation",
+        true,
+        cx.listener(move |this, _: &ClickEvent, window, cx| {
+            this.delete_conversation(
+                doomed.clone(),
+                doomed_title.clone(),
+                was_open,
+                window,
+                cx,
+            )
+        }),
+        cx,
+    ))
+    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+        this.go(Route::Assistant(Some(go.clone())), cx)
+    }))
+    .into_any_element()
+}
+
+/// The conversation's own menu: everything about the conversation rather than the work.
+///
+/// It is drawn inside the header, anchored under the button that opens it, and closes on any press
+/// outside it or on choosing something. The items are the capabilities the window already had, in
+/// one place: fork, pin, settle, rename, the pull request link, delete.
+/// What the menu needs to know about the conversation it serves.
+struct PanelFacts<'a> {
+    id: &'a str,
+    title: &'a str,
+    pinned: bool,
+    settled: bool,
+    snoozed: bool,
+    last_event: Option<i64>,
+    pr_url: Option<&'a str>,
+}
+
+fn conversation_panel(facts: PanelFacts<'_>, cx: &mut Context<Shell>) -> AnyElement {
+    let PanelFacts {
+        id,
+        title,
+        pinned,
+        settled,
+        snoozed,
+        last_event,
+        pr_url,
+    } = facts;
+    type Act = Box<dyn Fn(&mut Shell, &mut Window, &mut Context<Shell>)>;
+    // A third field says the row is destructive: it is the only one that is, and it says so in the
+    // colour rather than in the position.
+    let mut items: Vec<(&'static str, bool, Act)> = Vec::new();
+
+    if let Some(event) = last_event {
+        let (tid, ttitle) = (id.to_string(), title.to_string());
+        items.push((
+            "Fork from here",
+            false,
+            Box::new(move |_, _, cx| {
+                devd(cx).sync.mutate(
+                    Mutation::new(
+                        "chat.fork",
+                        json!({ "thread": tid, "event": event, "title": format!("Fork of {ttitle}") }),
+                    )
+                    .invalidating("chat"),
+                );
+            }),
+        ));
+    }
+    {
+        let tid = id.to_string();
+        items.push((
+            if pinned { "Unpin" } else { "Pin to the top" },
+            false,
+            Box::new(move |_, _, cx| {
+                devd(cx).sync.mutate(
+                    Mutation::new("chat.pin_session", json!({ "thread": tid, "pinned": !pinned }))
+                        .invalidating("chat"),
+                );
+            }),
+        ));
+    }
+    {
+        let tid = id.to_string();
+        items.push((
+            if settled { "Reopen" } else { "Mark as settled" },
+            false,
+            Box::new(move |_, _, cx| {
+                devd(cx).sync.mutate(
+                    Mutation::new("chat.settle", json!({ "thread": tid, "settled": !settled }))
+                        .invalidating("chat"),
+                );
+            }),
+        ));
+    }
+    {
+        let tid = id.to_string();
+        items.push((
+            "Rename",
+            false,
+            Box::new(move |this, window, cx| {
+                this.open_form(
+                    FormSpec {
+                        title: "Rename the conversation",
+                        intro: "The name it has in the list. Nothing else changes.",
+                        verb: "Rename",
+                        capability: "chat.update",
+                        domain: "chat",
+                        fixed: json!({ "thread": tid }),
+                        fields: vec![Field::text("title", "Name", "The checkout bug")],
+                        busy: None,
+                    },
+                    window,
+                    cx,
+                );
+            }),
+        ));
+    }
+    if snoozed {
+        let tid = id.to_string();
+        items.push((
+            "Wake it now",
+            false,
+            Box::new(move |_, _, cx| {
+                devd(cx).sync.mutate(
+                    Mutation::new("chat.snooze", json!({ "thread": tid })).invalidating("chat"),
+                );
+            }),
+        ));
+    } else {
+        for (label, until) in [
+            ("Snooze for an hour", snooze_in(1)),
+            ("Snooze until tomorrow", tomorrow_morning()),
+        ] {
+            let tid = id.to_string();
+            items.push((
+                label,
+                false,
+                Box::new(move |_, _, cx| {
+                    devd(cx).sync.mutate(
+                        Mutation::new(
+                            "chat.snooze",
+                            json!({ "thread": tid, "until": until.clone() }),
+                        )
+                        .invalidating("chat"),
+                    );
+                }),
+            ));
+        }
+    }
+    {
+        let tid = id.to_string();
+        items.push((
+            if pr_url.is_some() {
+                "Change the pull request"
+            } else {
+                "Link a pull request"
+            },
+            false,
+            Box::new(move |this, window, cx| {
+                this.open_form(
+                    FormSpec {
+                        title: "Link a pull request",
+                        intro: "The review this conversation is about. It shows beside the title and in the list.",
+                        verb: "Link",
+                        capability: "chat.link_pr",
+                        domain: "chat",
+                        fixed: json!({ "thread": tid }),
+                        fields: vec![Field::text(
+                            "url",
+                            "Address",
+                            "https://github.com/owner/repo/pull/1",
+                        )],
+                        busy: None,
+                    },
+                    window,
+                    cx,
+                );
+            }),
+        ));
+    }
+    if pr_url.is_some() {
+        let tid = id.to_string();
+        items.push((
+            "Unlink the pull request",
+            false,
+            Box::new(move |_, _, cx| {
+                devd(cx).sync.mutate(
+                    Mutation::new("chat.link_pr", json!({ "thread": tid })).invalidating("chat"),
+                );
+            }),
+        ));
+    }
+    {
+        let (tid, ttitle) = (id.to_string(), title.to_string());
+        items.push((
+            "Delete",
+            true,
+            Box::new(move |this, window, cx| {
+                this.delete_conversation(tid.clone(), ttitle.clone(), true, window, cx);
+            }),
+        ));
+    }
+
+    let t = theme(cx).clone();
+    let (text, danger, hover) = (t.text, t.danger, t.hover);
+    let mut rows = div().flex().flex_col().gap(px(1.0));
+    for (n, (label, destructive, action)) in items.into_iter().enumerate() {
+        rows = rows.child(
+            div()
+                .id(ui::nid("conversation.menu", n))
+                .h(px(30.0))
+                .px(px(10.0))
+                .flex()
+                .items_center()
+                .rounded(px(6.0))
+                .cursor_pointer()
+                .hover(move |s| s.bg(hover))
+                .child(
+                    div()
+                        .text_size(px(size::TEXT_SM))
+                        .text_color(if destructive { danger } else { text })
+                        .child(label),
+                )
+                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                    this.conversation_menu = false;
+                    action(this, window, cx);
+                })),
+        );
+    }
+
+    div()
+        .absolute()
+        .top(px(44.0))
+        // Lined up with the right edge of the header's last button, so the menu looks attached to it.
+        .right(px(24.0))
+        .w(px(232.0))
+        .p(px(5.0))
+        .flex()
+        .flex_col()
+        .gap(px(1.0))
+        .rounded(px(size::RADIUS_L))
+        .border_1()
+        .border_color(t.line_strong)
+        .bg(t.raised)
+        .shadow_lg()
+        .occlude()
+        .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+            this.conversation_menu = false;
+            cx.notify();
+        }))
+        .child(rows)
+        .into_any_element()
+}
+
+/// Whether a conversation is put aside right now.
+///
+/// The stored instant is compared, not the string: a snooze a person set in another time zone is
+/// still a moment, and comparing text would put it on the shelf for the wrong length of time.
+fn snoozed_now(thread: &Value) -> bool {
+    thread["snoozed_until"]
+        .as_str()
+        .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
+        .is_some_and(|at| at > chrono::Utc::now())
+}
+
+/// An instant some hours from now, in the form `chat.snooze` takes.
+fn snooze_in(hours: i64) -> String {
+    (chrono::Utc::now() + chrono::Duration::hours(hours)).to_rfc3339()
+}
+
+/// Nine in the morning on the next day, in the machine's own time zone.
+fn tomorrow_morning() -> String {
+    use chrono::TimeZone;
+    let tomorrow = chrono::Local::now().date_naive() + chrono::Duration::days(1);
+    tomorrow
+        .and_hms_opt(9, 0, 0)
+        .and_then(|nine| chrono::Local.from_local_datetime(&nine).single())
+        .map(|at| at.to_rfc3339())
+        .unwrap_or_else(|| snooze_in(12))
+}
+
+/// What a linked pull request is called in a conversation's header: `PR 42`, `MR 7`, or the words
+/// alone when the address does not end in a number.
+fn pr_label(url: &str) -> String {
+    let tail = url.trim_end_matches('/').rsplit('/').next().unwrap_or_default();
+    let kind = if url.contains("merge_requests") { "MR" } else { "PR" };
+    if !tail.is_empty() && tail.chars().all(|c| c.is_ascii_digit()) {
+        format!("{kind} {tail}")
+    } else {
+        "Pull request".to_string()
+    }
 }
 
 impl Shell {
@@ -650,6 +1079,45 @@ fn start(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
         .into_any_element()
 }
 
+/// The run a conversation belongs to, when it belongs to one: its origin, or an agent's own.
+fn run_of(shell: &Shell, id: &str, cx: &mut Context<Shell>) -> Option<String> {
+    let _ = shell;
+    run_of_self(id, cx)
+}
+
+/// The same, for a caller that has no shell at hand.
+pub fn run_of_self(id: &str, cx: &App) -> Option<String> {
+    devd(cx)
+        .sync
+        .watch(&q::threads())
+        .list("")
+        .iter()
+        .find(|th| th["id"].as_str() == Some(id))
+        .and_then(|th| th["team"]["run"].as_str().map(str::to_string))
+        .or_else(|| {
+            devd(cx)
+                .sync
+                .watch(&q::runs())
+                .list("")
+                .iter()
+                .find(|r| r["thread_id"].as_str() == Some(id))
+                .and_then(|r| r["id"].as_str().map(str::to_string))
+        })
+}
+
+/// Whether a run can still take a direction: a finished one would refuse it, and the person would
+/// get an error for having spoken in a conversation they were reading.
+pub fn run_open(run: &str, cx: &App) -> bool {
+    devd(cx)
+        .sync
+        .watch(&q::runs())
+        .list("")
+        .iter()
+        .find(|r| r["id"].as_str() == Some(run))
+        .map(|r| !matches!(r["state"].as_str().unwrap_or_default(), "done" | "failed" | "cancelled"))
+        .unwrap_or(false)
+}
+
 fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElement {
     cx.global_mut::<crate::state::Devd>().open_thread = Some(id.to_string());
     let t = theme(cx).clone();
@@ -708,6 +1176,26 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
             .into_any_element();
     };
     let events = data["events"].as_array().map(Vec::as_slice).unwrap_or(&[]);
+    // The conversation a run was started from is the **room**: the person's messages, the
+    // planner's and every specialist's, in one transcript. A specialist's own conversation is
+    // still that specialist's: it keeps its task, its branch and its own turns, and points back at
+    // the room. Reading Backend's chat and being shown what Implementer said is not a room, it is a
+    // wrong answer to "what did Backend do".
+    let room = run_of(shell, id, cx);
+    let seat = room.as_ref().map(|_| devd(cx).sync.watch(&q::team_log(id)));
+    let room_data = seat.as_ref().and_then(|s| s.data.as_deref());
+    let origin = room_data
+        .and_then(|d| d["origin"].as_str())
+        .map(str::to_string);
+    let in_room = origin.as_deref() == Some(id);
+    let room_events: Vec<Value> = if in_room {
+        room_data
+            .and_then(|d| d["events"].as_array().cloned())
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let events: &[Value] = if room_events.is_empty() { events } else { &room_events };
     let pending: Vec<&str> = data["pending"]
         .as_array()
         .map(Vec::as_slice)
@@ -723,6 +1211,26 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
         .update(id, events, &pending, writing.as_deref(), running);
 
     let thread = &data["thread"];
+    // The composer's effort is this conversation's, not the window's. Opening a conversation reads the
+    // level it has been running at, so the chip cannot say "Thinking off" above an agent that is
+    // thinking at the default, and a conversation set to Off does not come back as Medium.
+    if shell.compose.thread.as_deref() != Some(id) {
+        shell.compose.thread = Some(id.to_string());
+        shell.compose.effort = super::compose::level(thread["effort"].as_str());
+    }
+    // What this conversation's working tree has changed, for the branch beside the title and the
+    // count on the Changes action. A conversation with no project, or one whose project is not a
+    // repository, simply has nothing to say here.
+    let changes = devd(cx)
+        .sync
+        .watch(&q::thread_changes(id))
+        .data
+        .clone()
+        .map(|v| (*v).clone())
+        .unwrap_or(Value::Null);
+    let branch = changes["branch"].as_str().map(str::to_string);
+    let dirty = changes["clean"] == json!(false);
+    let changed = changes["files"].as_array().map(Vec::len).unwrap_or(0);
     if running {
         devd(cx).chat_running.set(true);
     }
@@ -736,16 +1244,57 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
     cx.global_mut::<crate::state::Devd>().link_root =
         thread["project"].as_str().map(std::path::PathBuf::from);
     let project = thread["project"].as_str().map(project_name);
-    let title = thread["title"]
-        .as_str()
-        .unwrap_or("Conversation")
-        .to_string();
+    // A room is the run, so it is titled with what the run is for rather than with the id it was
+    // given: a person reading the conversation should see the goal, not a database key. A
+    // specialist's conversation keeps its own title — its task — because that is what it is.
+    let run_data = if in_room {
+        room
+            .as_deref()
+            .and_then(|run| devd(cx).sync.watch(&q::run(run)).data.clone())
+    } else {
+        None
+    };
+    let title = match run_data
+        .as_ref()
+        .and_then(|d| d["run"]["goal"].as_str())
+        .map(str::to_string)
+    {
+        Some(goal) => {
+            let short: String = goal.chars().take(90).collect();
+            if short.len() < goal.len() { format!("{short}…") } else { short }
+        }
+        None => thread["title"]
+            .as_str()
+            .unwrap_or("Conversation")
+            .to_string(),
+    };
 
     // The heading: the title, then one quiet line of facts, then the actions. Facts are words in the page's secondary colour
     // separated by a middle dot, not badges; an error is not squeezed in here but given its own line below.
     let mut facts: Vec<String> = Vec::new();
     if let Some(project) = project {
         facts.push(project);
+    }
+    // Who is in the room and where the work stands: the roster is what makes a run a team rather
+    // than a queue, and it belongs beside the goal it is working toward. In a member's own
+    // conversation the useful facts are the task and its branch, which are already here.
+    if let Some(data) = run_data.as_ref() {
+        let mut roles: Vec<String> = data["tasks"]
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+            .iter()
+            .filter_map(|t| t["role"].as_str())
+            .map(role_title)
+            .collect();
+        roles.sort();
+        roles.dedup();
+        if let Some(state) = data["run"]["state"].as_str() {
+            facts.push(state.to_string());
+        }
+        if !roles.is_empty() {
+            facts.push(roles.join(", "));
+        }
     }
     if input + out > 0 {
         facts.push(token_facts(input, cached, out));
@@ -782,54 +1331,153 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
         .peek(&q::threads())
         .and_then(|snap| snap.list("").iter().find(|t| t["id"].as_str() == Some(id)).cloned());
     let pinned = marks.as_ref().is_some_and(|m| m["pinned_at"].is_string());
-    let last_event = events.last().and_then(|e| e["id"].as_i64());
-    let (to_pin, to_fork, fork_title) = (id.to_string(), id.to_string(), title.clone());
-    actions = actions
-        .child(
+    let settled_now = thread["settled_at"].is_string();
+    // Where this conversation's files are: its own worktree, or the project's folder.
+    let in_worktree = thread["workdir"]
+        .as_str()
+        .filter(|w| !w.is_empty())
+        .map(str::to_string);
+    if thread["project"].as_str().is_some() || in_worktree.is_some() {
+        let tid = id.to_string();
+        let tooltip = if in_worktree.is_some() {
+            "Working in its own worktree — click to go back to the project"
+        } else {
+            "Give this conversation its own worktree, so its changes cannot collide with other work"
+        };
+        let back = in_worktree.is_some();
+        actions = actions.child(
             div()
-                .id("conversation.pin.wrap")
-                .tooltip(ui::tip(if pinned { "Unpin from the top of the list" } else { "Pin to the top of the list" }))
+                .id("conversation.worktree.wrap")
+                .tooltip(ui::tip(tooltip))
                 .child(
-                    Button::icon_only("conversation.pin", "pin")
-                        .kind(if pinned { ButtonKind::Secondary } else { ButtonKind::Ghost })
-                        .on_click(move |_, _, cx| {
-                            devd(cx).sync.mutate(
-                                Mutation::new("chat.pin_session", json!({ "thread": to_pin, "pinned": !pinned })).invalidating("chat"),
-                            );
-                        }),
+                    Button::icon_only("conversation.worktree", "branch")
+                        .kind(if in_worktree.is_some() {
+                            ButtonKind::Secondary
+                        } else {
+                            ButtonKind::Ghost
+                        })
+                        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                            if back {
+                                devd(cx).sync.mutate(
+                                    Mutation::new(
+                                        "chat.worktree",
+                                        json!({ "thread": tid, "action": "detach" }),
+                                    )
+                                    .invalidating("chat"),
+                                );
+                            } else {
+                                this.confirm(
+                                    "Give this conversation its own worktree?".to_string(),
+                                    "Its tools will work in a separate folder on its own branch, in the same repository, so this conversation's changes cannot collide with another piece of work. Nothing is deleted, and going back keeps the folder.".to_string(),
+                                    "Start a worktree",
+                                    false,
+                                    Mutation::new(
+                                        "chat.worktree",
+                                        json!({ "thread": tid, "action": "create" }),
+                                    )
+                                    .invalidating("chat"),
+                                    window,
+                                    cx,
+                                );
+                            }
+                        })),
                 ),
-        )
-        .children(last_event.map(|event| {
+        );
+    }
+    // Review what this conversation changed, in the project's own Git surface: staging, per-file
+    // diffs, the commit, pull and push. A second changes screen would only drift from that one.
+    if let Some(dir) = thread["workdir"]
+        .as_str()
+        .filter(|w| !w.is_empty())
+        .or_else(|| thread["project"].as_str())
+        .map(str::to_string)
+    {
+        let open = dir.clone();
+        actions = actions.child(
             div()
-                .id("conversation.fork.wrap")
-                .tooltip(ui::tip("Fork: a new conversation from here, leaving this one as it is"))
-                .child(Button::icon_only("conversation.fork", "branch").on_click(move |_, _, cx| {
-                    devd(cx).sync.mutate(
-                        Mutation::new(
-                            "chat.fork",
-                            json!({ "thread": to_fork, "event": event, "title": format!("Fork of {fork_title}") }),
-                        )
-                        .invalidating("chat"),
-                    );
+                .id("conversation.changes.wrap")
+                .tooltip(ui::tip(match changed {
+                    0 => "Review the changes, then commit and push".to_string(),
+                    1 => "1 file changed — review it, then commit and push".to_string(),
+                    n => format!("{n} files changed — review them, then commit and push"),
                 }))
-        }));
-    let (doomed, doomed_title) = (id.to_string(), title.clone());
+                .child(
+                    div()
+                        .relative()
+                        .child(
+                            Button::icon_only("conversation.changes", "diff")
+                                .kind(if dirty {
+                                    ButtonKind::Secondary
+                                } else {
+                                    ButtonKind::Ghost
+                                })
+                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                    this.go(
+                                        Route::project(
+                                            open.clone(),
+                                            devd_app_core::project::ProjectTab::Changes,
+                                        ),
+                                        cx,
+                                    )
+                                })),
+                        )
+                        // A dot, not a badge: the count is in the tooltip and the Changes screen.
+                        .children(dirty.then(|| {
+                            div()
+                                .absolute()
+                                .top(px(2.0))
+                                .right(px(2.0))
+                                .size(px(6.0))
+                                .rounded_full()
+                                .bg(t.warn)
+                        })),
+                ),
+        );
+    }
+    // The last step of the loop, on a branch of its own: a pushed branch becomes a review.
+    if in_worktree.is_some() && thread["pr_url"].as_str().is_none_or(str::is_empty) {
+        let tid = id.to_string();
+        actions = actions.child(
+            div()
+                .id("conversation.pr.open.wrap")
+                .tooltip(ui::tip("Open a pull request for this branch, once it is pushed"))
+                .child(
+                    Button::icon_only("conversation.pr.open", "external")
+                        .kind(ButtonKind::Ghost)
+                        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                            this.confirm(
+                                "Open a pull request for this branch?".to_string(),
+                                "The branch must already be pushed — a review is of commits the host can see. Its title and body are filled from the commits, and the pull request is linked to this conversation.".to_string(),
+                                "Open the pull request",
+                                false,
+                                Mutation::new("chat.pr", json!({ "thread": tid })).invalidating("chat"),
+                                window,
+                                cx,
+                            );
+                        })),
+                ),
+        );
+    }
+    let last_event = events.last().and_then(|e| e["id"].as_i64());
+    // Everything about the conversation rather than the work — pin, settle, fork, rename, the pull
+    // request link, delete — lives in one menu, so the bar keeps only what a person does while
+    // working: stop, where the files are, the changes, and the review.
     actions = actions.child(
         div()
-            .id("conversation.delete.wrap")
-            .tooltip(ui::tip("Delete conversation"))
+            .id("conversation.more.wrap")
+            // No tooltip while the menu is open: it would sit on top of the menu it opened.
+            .when(!shell.conversation_menu, |d| d.tooltip(ui::tip("Conversation menu")))
             .child(
-                Button::icon_only("conversation.delete", "trash").on_click(cx.listener(
-                    move |this, _: &ClickEvent, window, cx| {
-                        this.delete_conversation(
-                            doomed.clone(),
-                            doomed_title.clone(),
-                            true,
-                            window,
-                            cx,
-                        )
-                    },
-                )),
+                Button::icon_only("conversation.more", "more")
+                    .kind(if shell.conversation_menu {
+                        ButtonKind::Secondary
+                    } else {
+                        ButtonKind::Ghost
+                    })
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.conversation_menu = !this.conversation_menu;
+                        cx.notify();
+                    })),
             ),
     );
     let head = div()
@@ -839,6 +1487,7 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
         .flex_none()
         .items_center()
         .gap(px(16.0))
+        .relative()
         .border_b_1()
         .border_color(t.line)
         .child(
@@ -853,8 +1502,63 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
                         .min_w_0()
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(t.text)
-                        .child(ui::Clip::new(title)),
+                        .child(ui::Clip::new(title.clone())),
                 )
+                // A member's own conversation is not the room, but the room is one press away: a
+                // specialist's log is where its work happened, and the conversation it belongs to is
+                // where the team talked about it.
+                .children(origin.as_deref().filter(|_| !in_room).map(|org| {
+                    let (target, hover) = (org.to_string(), t.hover);
+                    div()
+                        .id("conversation.room")
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .gap(px(4.0))
+                        .px(px(7.0))
+                        .py(px(2.0))
+                        .rounded(px(size::RADIUS))
+                        .cursor_pointer()
+                        .text_size(px(size::TEXT_XS))
+                        .text_color(t.muted)
+                        .hover(move |s| s.bg(hover))
+                        .child("In the room")
+                        .child(icon("arrow-right", 11.0, t.faint))
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            this.go(Route::Assistant(Some(target.clone())), cx);
+                        }))
+                }))
+                // The branch, when this conversation works on one of its own: a quiet fact beside
+                // the title, the same weight as the pull request link under it.
+                .children(branch.map(|b| {
+                    div()
+                        .flex_none()
+                        .text_size(px(size::TEXT_XS))
+                        .text_color(t.faint)
+                        .child(b)
+                }))
+                // The pull request this conversation is about, when one is linked: a quiet link
+                // beside the title, never a badge competing with it.
+                .children(thread["pr_url"].as_str().map(|url| {
+                    let (url, label) = (url.to_string(), pr_label(url));
+                    let (hover, muted, faint) = (t.text, t.muted, t.faint);
+                    div()
+                        .id("conversation.pr")
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .gap(px(4.0))
+                        .text_size(px(size::TEXT_SM))
+                        .text_color(muted)
+                        .cursor_pointer()
+                        .hover(move |s| s.text_color(hover))
+                        .child(ui::icon("external", 11.0, faint))
+                        .child(label)
+                        .tooltip(ui::tip("The pull request this conversation is about"))
+                        .on_click(move |_, _, _| {
+                            let _ = open::that(&url);
+                        })
+                }))
                 .children((!facts.is_empty()).then(|| {
                     div()
                         .flex_none()
@@ -865,15 +1569,22 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
         )
         .child(actions);
 
+
     // A conversation that stopped on an error says so once. Its last failure in the transcript is where that is read,
     // beside the message box, and that is where it is resumed from. Only when the transcript holds no such failure is
     // it said above instead.
     let items = shell.transcript.items.clone();
     // What the status line says devd is doing: thinking, writing, or the step that is running.
     let is_writing = writing.as_deref().is_some_and(|w| !w.trim().is_empty());
-    let (doing, glimpse) = match (&thinking, is_writing) {
-        (Some((_, tail)), false) => ("Thinking".to_string(), Some(tail.clone())),
-        (_, true) => ("Writing".to_string(), None),
+    // The thought itself is never put in the status line. It is there for the person to open, and
+    // until they do the line says only that the model is thinking.
+    let thought = match (&thinking, is_writing) {
+        (Some((_, text)), false) if !text.trim().is_empty() => Some(text.clone()),
+        _ => None,
+    };
+    let doing = match (&thinking, is_writing) {
+        (Some(_), false) => "Thinking".to_string(),
+        (_, true) => "Writing".to_string(),
         // What is being done right now, said as the step's own row would say it: "Reading a.rs", "Running cargo test".
         _ => {
             let step = items.iter().rev().find_map(|i| match i {
@@ -883,7 +1594,7 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
                 }
                 _ => None,
             });
-            (step.unwrap_or_else(|| "Working".to_string()), None)
+            step.unwrap_or_else(|| "Working".to_string())
         }
     };
     // The step that is running is this line; its own row in the transcript would say the same thing twice.
@@ -937,7 +1648,7 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
         let content = match items.get(index) {
             Some(item) => draw(&key, index, item, resume_at == Some(index), cx),
             None => match &live {
-                Some(blocks) => devd_writes(&format!("{key}.live"), blocks, "", true, cx),
+                Some(blocks) => devd_writes(&format!("{key}.live"), blocks, "", TurnStyle::default(), true, cx),
                 None => div().into_any_element(),
             },
         };
@@ -984,8 +1695,8 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
                     .render(cx),
             ))
         });
-    let chain = chain(shell, id, thread, cx);
     div()
+        .relative()
         .flex_1()
         .min_w_0()
         .h_full()
@@ -993,7 +1704,6 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
         .flex_col()
         .child(head)
         .children(goal_banner)
-        .children(chain)
         .child(div().flex_1().min_h_0().child(body))
         .child(
             // Pinned to the column's width, as the transcript rows are, so the box keeps its place and its width
@@ -1006,145 +1716,69 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
                 .pt(px(8.0))
                 .children(stopped)
                 .children(waiting_rows(id, &data, cx))
-                .children(running.then(|| activity_line(doing.clone(), glimpse.clone(), turn_began, cx)))
-                .child(composer(
+                .children(running.then(|| {
+                    // The reasoning sits behind a click, not in the line: "Thinking" says the model
+                    // is working, and opening it shows the process - the way the assistants people
+                    // already use do it. Nothing of the thought is shown until they ask.
+                    let t = theme(cx);
+                    let open = cx.global::<crate::state::Devd>().thinking_open.contains(id);
+                    let mut column = div().w_full().max_w(px(size::READING)).mx_auto().flex_col();
+                    if let Some(text) = thought.clone() {
+                        let key = id.to_string();
+                        let head = Button::new("thread.thinking", "Thinking")
+                            .kind(ButtonKind::Ghost)
+                            .icon(if open { "chevron-down" } else { "chevron-right" })
+                            .on_click(move |_, _, cx| {
+                                let devd = cx.global_mut::<crate::state::Devd>();
+                                if !devd.thinking_open.remove(&key) {
+                                    devd.thinking_open.insert(key.clone());
+                                }
+                                cx.refresh_windows();
+                            });
+                        column = column.child(div().pb(px(6.0)).child(head));
+                        if open {
+                            column = column.child(
+                                div()
+                                    .id(ui::nid("thinking.body", 0))
+                                    .max_h(px(220.0))
+                                    .overflow_y_scroll()
+                                    .pb(px(8.0))
+                                    .text_size(px(size::TEXT_SM))
+                                    .line_height(px(19.0))
+                                    .text_color(t.faint)
+                                    .child(text),
+                            );
+                        }
+                    }
+                    column.child(activity_line(doing.clone(), turn_began, cx))
+                }))                .child(composer(
                     shell,
                     if running {
-                        "A message now is read at its next step"
+                        "A message sent now is read at its next step"
                     } else {
                         "Enter sends · Shift+Enter adds a line"
                     },
                     cx,
                 )),
         )
-        .into_any_element()
-}
-
-/// The team behind this conversation, as a chain under its heading: every agent in the run, joined by what each waits for.
-///
-/// A conversation belongs to a run in one of two ways: it is the one the person started the run from, or it is one
-/// of the agents' own. Either way the whole run is shown, with the agent whose conversation this is marked.
-fn chain(
-    shell: &mut Shell,
-    id: &str,
-    thread: &Value,
-    cx: &mut Context<Shell>,
-) -> Option<AnyElement> {
-    let t = theme(cx).clone();
-    // The conversation's own record may not say which run it belongs to; the list of conversations always does.
-    let run_id = thread["team"]["run"]
-        .as_str()
-        .map(str::to_string)
-        .or_else(|| {
-            devd(cx)
-                .sync
-                .watch(&q::threads())
-                .list("")
-                .iter()
-                .find(|th| th["id"].as_str() == Some(id))
-                .and_then(|th| th["team"]["run"].as_str().map(str::to_string))
-        })
-        .or_else(|| {
-            devd(cx)
-                .sync
-                .watch(&q::runs())
-                .list("")
-                .iter()
-                .find(|r| r["thread_id"].as_str() == Some(id))
-                .and_then(|r| r["id"].as_str().map(str::to_string))
-        })?;
-    let run = devd(cx).sync.watch(&q::run(&run_id));
-    let data = run.data.clone()?;
-    let tasks: Vec<Value> = data["tasks"].as_array().cloned().unwrap_or_default();
-    if tasks.is_empty() {
-        return None;
-    }
-    let open = !shell.chain_collapsed;
-    let go = run_id.clone();
-    let header = div()
-        .id("chain.header")
-        .h(px(36.0))
-        .flex()
-        .flex_none()
-        .items_center()
-        .gap(px(10.0))
-        .px(px(20.0))
-        .cursor_pointer()
-        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-            this.chain_collapsed = !this.chain_collapsed;
-            cx.notify();
+        // The conversation's menu is the last child of the column, drawn over the transcript rather
+        // than under it: it belongs to the header but it has to be above everything, and painting
+        // later is the only way to be.
+        .children(shell.conversation_menu.then(|| {
+            conversation_panel(
+                PanelFacts {
+                    id,
+                    title: &title,
+                    pinned,
+                    settled: settled_now,
+                    snoozed: snoozed_now(thread),
+                    last_event,
+                    pr_url: thread["pr_url"].as_str(),
+                },
+                cx,
+            )
         }))
-        .child(icon(
-            if open {
-                "chevron-down"
-            } else {
-                "chevron-right"
-            },
-            13.0,
-            t.faint,
-        ))
-        .child(icon("team", 14.0, t.muted))
-        .child(
-            div()
-                .text_size(px(size::TEXT_SM))
-                .font_weight(FontWeight::MEDIUM)
-                .child("The team"),
-        )
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .text_size(px(size::TEXT_SM))
-                .text_color(t.muted)
-                .child(ui::Clip::new(format!(
-                    "{} · {}",
-                    ui::flow::summary(&tasks),
-                    ui::flow::status_line(
-                        data["run"]["state"].as_str().unwrap_or("running"),
-                        &tasks
-                    )
-                ))),
-        )
-        .child(
-            div()
-                .id("chain.open")
-                .flex()
-                .items_center()
-                .gap(px(5.0))
-                .px(px(8.0))
-                .py(px(3.0))
-                .rounded(px(size::RADIUS))
-                .cursor_pointer()
-                .text_size(px(size::TEXT_SM))
-                .text_color(t.muted)
-                .hover(|s| s.bg(t.hover))
-                .child("Open run")
-                .child(icon("arrow-right", 12.0, t.faint))
-                .on_click(cx.listener(move |this, ev: &ClickEvent, _, cx| {
-                    cx.stop_propagation();
-                    let _ = ev;
-                    this.go(Route::Runs(Some(go.clone())), cx)
-                })),
-        );
-    let mut column = div()
-        .flex_none()
-        .flex()
-        .flex_col()
-        .border_b_1()
-        .border_color(t.line)
-        .child(header);
-    if open {
-        column = column.child(
-            div().px(px(20.0)).pb(px(12.0)).child(
-                div()
-                    .id("chain.scroll")
-                    .max_h(px(300.0))
-                    .overflow_y_scroll()
-                    .child(ui::flow::graph("chain", &tasks, Some(id), cx)),
-            ),
-        );
-    }
-    Some(column.into_any_element())
+        .into_any_element()
 }
 
 thread_local! {
@@ -1172,25 +1806,12 @@ fn forget_running(thread: &str, index: usize) -> Option<u64> {
 }
 
 /// While devd works: what it is doing now, and how long since the person last spoke. It sits at the foot of
-/// the reply, above the message box, for the whole turn: a step running ("Running go test"), the model thinking
-/// (with the latest of its thought, faint), or the words being written. Nothing about a long turn should look
-/// like a hang.
-fn activity_line(doing: String, glimpse: Option<String>, since: Option<chrono::DateTime<chrono::Utc>>, cx: &App) -> AnyElement {
+/// the reply, above the message box, for the whole turn: a step running ("Running go test"), the model
+/// thinking, or the words being written. The thought itself is not here - it is behind the "Thinking"
+/// control above this line - because reasoning read as it streams is noise, not progress.
+fn activity_line(doing: String, since: Option<chrono::DateTime<chrono::Utc>>, cx: &App) -> AnyElement {
     let t = theme(cx);
     let took = since.map(|at| took((chrono::Utc::now() - at).num_seconds().max(0) as u64));
-    // The label and the time keep their width; the glimpse of thought takes only what is left, and is cut at the
-    // row's edge. It is the latest few words, so the end of the thought is what shows.
-    let glimpse = glimpse.map(|g| {
-        let words: Vec<&str> = g.split_whitespace().collect();
-        let mut tail = String::new();
-        for word in words.iter().rev() {
-            if tail.chars().count() + word.chars().count() > 110 {
-                break;
-            }
-            tail = if tail.is_empty() { word.to_string() } else { format!("{word} {tail}") };
-        }
-        format!("…{tail}")
-    });
     div()
         .w_full()
         .max_w(px(size::READING))
@@ -1202,18 +1823,17 @@ fn activity_line(doing: String, glimpse: Option<String>, since: Option<chrono::D
         .overflow_hidden()
         .text_size(px(size::TEXT_SM))
         .child(div().flex_none().child(ui::motion::spinner("thread.spinner", t.accent)))
-        .child(div().flex_none().max_w(px(520.0)).overflow_hidden().whitespace_nowrap().text_color(t.muted).child(doing))
-        .children(took.map(|took| div().flex_none().font_family(mono()).text_size(px(size::TEXT_XS)).text_color(t.faint).child(took)))
-        .children(glimpse.map(|g| {
+        // What is running wraps: the line saying what is taking seven minutes must be readable, and
+        // a test name is long.
+        .child(
             div()
                 .flex_1()
                 .min_w_0()
-                .overflow_hidden()
-                .whitespace_nowrap()
-                .italic()
-                .text_color(t.faint)
-                .child(g)
-        }))
+                .text_color(t.muted)
+                .child(doing),
+        )
+        .children(took.map(|took| div().flex_none().font_family(mono()).text_size(px(size::TEXT_XS)).text_color(t.faint).child(took)))
+
         .into_any_element()
 }
 
@@ -1297,8 +1917,88 @@ fn draw(thread: &str, index: usize, item: &Item, resume: bool, cx: &App) -> AnyE
                     .child(md::linked(&format!("{thread}.{index}.you"), text, cx)),
             )
             .into_any_element(),
-        Item::Devd { blocks, model } => {
-            devd_writes(&format!("{thread}.{index}"), blocks, model, false, cx)
+        Item::Devd {
+            blocks,
+            model,
+            role,
+            bubble,
+            thread: said_in,
+        } => devd_writes(
+            &format!("{thread}.{index}"),
+            blocks,
+            model,
+            TurnStyle {
+                role: role.as_deref(),
+                bubble: *bubble,
+                // A teammate's bubble in a room is a door: pressing it opens the conversation that
+                // message came from, so the detail is one press away instead of a search in the list.
+                open: said_in.as_deref().filter(|said_in| *said_in != thread),
+            },
+            false,
+            cx,
+        ),
+        // One teammate speaking to the room: a name, who it is for, and what it is about, because
+        // in a room the reply target is half the message.
+        Item::Said {
+            from,
+            to,
+            about,
+            text,
+        } => {
+            let name = if from == "devd" {
+                "devd".to_string()
+            } else {
+                role_title(from)
+            };
+            let initials: String = name
+                .split_whitespace()
+                .filter_map(|w| w.chars().next())
+                .take(2)
+                .collect();
+            let mut head = div()
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .child(ui::face(initials, role_tone(from), false, cx))
+                .child(
+                    div()
+                        .text_size(px(size::TEXT_XS))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(t.muted)
+                        .child(name),
+                );
+            if let Some(to) = to {
+                head = head.child(
+                    div()
+                        .text_size(px(size::TEXT_XS))
+                        .text_color(t.accent)
+                        .child(format!("@{to}")),
+                );
+            }
+            if let Some(about) = about {
+                head = head.child(
+                    div()
+                        .text_size(px(size::TEXT_XS))
+                        .text_color(t.faint)
+                        .child(format!("· {about}")),
+                );
+            }
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(6.0))
+                .p(px(11.0))
+                .rounded(px(size::RADIUS_L))
+                .bg(t.hover)
+                .child(head)
+                .child(
+                    div()
+                        .text_size(px(size::TEXT_MD))
+                        .line_height(px(22.0))
+                        .text_color(t.text)
+                        .child(text.clone()),
+                )
+                .into_any_element()
         }
         Item::Tool {
             name,
@@ -1342,10 +2042,12 @@ fn draw(thread: &str, index: usize, item: &Item, resume: bool, cx: &App) -> AnyE
                 Phase::Done => icon(glyph, 13.0, t.faint).into_any_element(),
                 Phase::Failed => icon("x", 13.0, t.danger).into_any_element(),
             };
-            // What was done reads as prose; what it was done to is the code.
+            // What was done reads as prose; what it was done to is the code. A step that failed
+            // wraps, because its reason is the whole point of the line: a message cut at the
+            // column's edge is a message that cannot be acted on.
             let mut line = div()
                 .flex()
-                .items_center()
+                .items_start()
                 .gap(px(8.0))
                 .pl(px(2.0))
                 .text_size(px(size::TEXT))
@@ -1355,6 +2057,7 @@ fn draw(thread: &str, index: usize, item: &Item, resume: bool, cx: &App) -> AnyE
                         .flex()
                         .flex_none()
                         .justify_center()
+                        .mt(px(2.0))
                         .child(mark),
                 )
                 .child(
@@ -1408,7 +2111,7 @@ fn draw(thread: &str, index: usize, item: &Item, resume: bool, cx: &App) -> AnyE
                         .min_w_0()
                         .text_size(px(size::TEXT_SM))
                         .text_color(t.faint)
-                        .child(ui::Clip::new(detail.clone())),
+                        .child(detail.clone()),
                 );
             }
             if let Some(took) = waiting.filter(|s| *s >= 15) {
@@ -1423,14 +2126,22 @@ fn draw(thread: &str, index: usize, item: &Item, resume: bool, cx: &App) -> AnyE
             }
             line.into_any_element()
         }
+        // A notice is prose: it wraps inside the transcript's column, and the icon sits with its
+        // first line rather than centred against four lines of text.
         Item::Notice(text) => div()
             .flex()
-            .items_center()
+            .items_start()
             .gap(px(8.0))
             .text_size(px(size::TEXT_SM))
             .text_color(t.muted)
-            .child(icon("info", 13.0, t.faint))
-            .child(text.clone())
+            .child(div().flex_none().mt(px(1.0)).child(icon("info", 13.0, t.faint)))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .line_height(px(19.0))
+                    .child(text.clone()),
+            )
             .into_any_element(),
         Item::Failed(text) => {
             let words = md::linked(&format!("{thread}.{index}.failed"), text, cx);
@@ -1533,15 +2244,102 @@ fn draw(thread: &str, index: usize, item: &Item, resume: bool, cx: &App) -> AnyE
 }
 
 /// devd's words: reading text at reading width, with the model named once, quietly.
-fn devd_writes(id: &str, blocks: &[Block], model: &str, live: bool, cx: &App) -> AnyElement {
+/// A role's name as a person reads it: `implementer` is "Implementer", `qa` is "QA".
+fn role_title(role: &str) -> String {
+    if role == "qa" {
+        return "QA".to_string();
+    }
+    let words = role.replace(['-', '_'], " ");
+    let mut chars = words.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
+/// A role's face colour, stable across a room: the same member keeps the same colour in every
+/// bubble and every run, so a long transcript is scanned by identity rather than read by name.
+///
+/// The palette is the four tones that mean nothing bad. Red and amber are reserved for failure and
+/// warning, and a person must never have to work out whether green means "passed" or "is the QA
+/// engineer".
+fn role_tone(role: &str) -> Tone {
+    let mut hash: u32 = 0;
+    for byte in role.bytes() {
+        hash = hash.wrapping_mul(31).wrapping_add(u32::from(byte));
+    }
+    match hash % 4 {
+        0 => Tone::Accent,
+        1 => Tone::Info,
+        2 => Tone::Ok,
+        _ => Tone::Neutral,
+    }
+}
+
+/// How a turn is drawn: who said it (when it opens a speaker's run of messages), whether it is a
+/// member's bubble rather than the assistant's own voice, and where pressing the name leads.
+#[derive(Default, Clone, Copy)]
+struct TurnStyle<'a> {
+    role: Option<&'a str>,
+    bubble: bool,
+    open: Option<&'a str>,
+}
+
+fn devd_writes(
+    id: &str,
+    blocks: &[Block],
+    model: &str,
+    style: TurnStyle<'_>,
+    live: bool,
+    cx: &App,
+) -> AnyElement {
+    let TurnStyle { role, bubble, open } = style;
     let t = theme(cx);
     let mut column = div()
         .flex()
         .flex_col()
         .gap(px(6.0))
         .text_size(px(size::TEXT_MD))
-        .line_height(px(22.0))
-        .child(md::document(id, blocks, cx));
+        .line_height(px(22.0));
+    // In a team room every bubble says who is speaking: a face and a name, the way a group chat
+    // does, so the room reads without opening a conversation per agent.
+    if let Some(role) = role {
+        let name = role_title(role);
+        let initials: String = name
+            .split_whitespace()
+            .filter_map(|w| w.chars().next())
+            .take(2)
+            .collect();
+        let mut head = div()
+            .id(gpui::ElementId::Name(format!("{id}.head").into()))
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .child(ui::face(initials, role_tone(role), false, cx))
+            .child(
+                div()
+                    .text_size(px(size::TEXT_XS))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(t.muted)
+                    .child(name),
+            );
+        // The name is the way in: it says whose words these are and where the rest of them live.
+        if let Some(open) = open {
+            let (target, hover) = (open.to_string(), t.hover);
+            head = head
+                .px(px(4.0))
+                .py(px(1.0))
+                .ml(px(-4.0))
+                .rounded(px(size::RADIUS))
+                .cursor_pointer()
+                .hover(move |s| s.bg(hover))
+                .on_click(move |_, _, cx| {
+                    cx.global_mut::<crate::state::Devd>().opened_thread = Some(target.clone());
+                });
+        }
+        column = column.child(head);
+    }
+    column = column.child(md::document(id, blocks, cx));
     if live {
         column = column.child(
             div()
@@ -1564,6 +2362,14 @@ fn devd_writes(id: &str, blocks: &[Block], model: &str, live: bool, cx: &App) ->
                 .text_color(t.faint)
                 .child(model.to_string()),
         );
+    }
+    // A teammate's turn is a bubble, not a wall: the card is what makes a room read as a room.
+    // The assistant's own turns stay flat, because they are the conversation's own voice.
+    if bubble {
+        column = column
+            .p(px(12.0))
+            .rounded(px(size::RADIUS_L))
+            .bg(t.raised);
     }
     column.into_any_element()
 }
@@ -1654,6 +2460,42 @@ mod tests {
         assert_eq!(named, ["", "", "deepseek-flash", "deepseek-flash"], "under the last step of each turn only");
     }
 
+    /// Three edits in a row are one line, not three: a file keeps its latest status, and Undo still
+    /// points at the most recent change.
+    #[test]
+    fn a_run_of_edits_is_one_line_with_each_file_at_its_latest_state() {
+        let changes = |id: i64, files: Value| {
+            json!({ "id": id, "kind": "changes", "data": { "files": files } })
+        };
+        let items = fold(
+            &[
+                event("user", json!({ "text": "go" })),
+                changes(1, json!([{ "status": "M", "path": "a.go" }])),
+                changes(2, json!([{ "status": "M", "path": "b.go" }, { "status": "A", "path": "a.go" }])),
+                changes(3, json!([{ "status": "M", "path": "c.go" }])),
+            ],
+            &[],
+            false,
+        );
+        let rows: Vec<&Item> = items.iter().filter(|i| matches!(i, Item::Changes { .. })).collect();
+        assert_eq!(rows.len(), 1, "one line for the run of edits: {items:?}");
+        match rows[0] {
+            Item::Changes { event, files, .. } => {
+                assert_eq!(*event, 3, "Undo takes back the most recent change");
+                assert_eq!(
+                    files,
+                    &vec![
+                        ("A".to_string(), "a.go".to_string()),
+                        ("M".to_string(), "b.go".to_string()),
+                        ("M".to_string(), "c.go".to_string())
+                    ],
+                    "each file once, at its latest state"
+                );
+            }
+            _ => unreachable!(),
+        }
+    }
+
     #[test]
     fn a_conversations_tokens_are_said_apart_not_as_one_prompt_total() {
         assert_eq!(
@@ -1662,6 +2504,97 @@ mod tests {
             "the prompt total is mostly cache reads and must not read as fresh work"
         );
         assert_eq!(token_facts(400, 0, 0), "400 fresh in · 0 cached · 0 out");
+    }
+
+    /// A member keeps their colour: the same role always reads the same, and the palette never
+    /// borrows the two tones that mean something is wrong.
+    #[test]
+    fn a_members_colour_is_theirs_and_never_a_warning() {
+        assert_eq!(role_tone("backend"), role_tone("backend"), "a member keeps their colour");
+        assert!(
+            role_tone("backend") != role_tone("reviewer"),
+            "two members are told apart without reading their names"
+        );
+        for role in ["backend", "reviewer", "qa", "implementer", "planner", "docs", "designer"] {
+            let tone = role_tone(role);
+            assert!(
+                !matches!(tone, Tone::Danger | Tone::Warn),
+                "{role} must not wear a colour that means a problem"
+            );
+        }
+    }
+
+    /// A room is one conversation: a teammate's turn is tagged with the role that said it, and a
+    /// message one teammate addresses to another carries who said it and who it is for.
+    #[test]
+    fn a_room_tags_each_turn_with_its_speaker_and_keeps_what_a_message_answers() {
+        let events = [
+            event("user", json!({ "text": "build it" })),
+            json!({
+                "kind": "assistant",
+                "role": "backend",
+                "data": { "model": "deepseek-flash", "content": [{ "type": "text", "text": "Done: the scheduler." }] }
+            }),
+            json!({
+                "kind": "agent",
+                "role": "backend",
+                "data": { "from": "backend", "to": "reviewer", "about": "scheduler", "text": "Can you look at the retry loop?" }
+            }),
+            json!({
+                "kind": "assistant",
+                "role": null,
+                "data": { "model": "deepseek-flash", "content": [{ "type": "text", "text": "The reviewer has it." }] }
+            }),
+        ];
+        let items = fold(&events, &[], false);
+        // The assistant's own turn keeps no role: it is the room's voice, not a member of it.
+        assert!(
+            matches!(&items[1], Item::Devd { role: Some(role), bubble: true, .. } if role == "backend"),
+            "{items:?}"
+        );
+        assert!(
+            matches!(&items[2], Item::Said { from, to: Some(to), about: Some(about), .. }
+                if from == "backend" && to == "reviewer" && about == "scheduler"),
+            "{items:?}"
+        );
+        assert!(matches!(&items[3], Item::Devd { role: None, bubble: false, .. }), "{items:?}");
+    }
+
+    /// A member who says three things in a row is one voice in the room, not three: the heading is
+    /// stated once and the rest are its bubbles.
+    #[test]
+    fn consecutive_messages_from_one_member_share_one_heading() {
+        let said = |role: &str, text: &str| {
+            json!({
+                "kind": "assistant",
+                "role": role,
+                "data": { "model": "deepseek-flash", "content": [{ "type": "text", "text": text }] }
+            })
+        };
+        let items = fold(
+            &[
+                said("implementer", "The host is Windows."),
+                // A tool line between two messages does not change who is talking.
+                json!({ "kind": "tool_result", "data": { "tool_use_id": "t1", "content": "ok" } }),
+                said("implementer", "Committing the code first."),
+                said("reviewer", "Looks right."),
+                said("implementer", "Final checks."),
+            ],
+            &[],
+            false,
+        );
+        let headings: Vec<Option<&str>> = items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Devd { role, bubble: true, .. } => Some(role.as_deref()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            headings,
+            vec![Some("implementer"), None, Some("reviewer"), Some("implementer")],
+            "one heading per speaker run: {items:?}"
+        );
     }
 
     #[test]

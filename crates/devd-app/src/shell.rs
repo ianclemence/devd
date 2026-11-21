@@ -342,8 +342,8 @@ pub struct Shell {
     pub browser_ui: screens::browser::BrowserUi,
     /// The assistant's side pane: shells and the browser.
     pub pane: screens::pane::PaneUi,
-    /// Whether the chain of agents under a conversation is folded away.
-    pub chain_collapsed: bool,
+    /// Whether the conversation's own menu is open: fork, settle, rename, link, delete.
+    pub conversation_menu: bool,
     _watch: Subscription,
 }
 
@@ -359,6 +359,7 @@ impl Shell {
         let dictionary = std::sync::Arc::new(devd_app_core::spell::Dictionary::for_this_machine(
             &personal,
         ));
+        crate::mark(&crate::DICT_MS);
         let composer = cx.new(|cx| {
             TextInput::new("Ask devd anything. / for skills, @ for a teammate", cx)
                 .multiline(8)
@@ -397,6 +398,7 @@ impl Shell {
         });
         let intel = screens::intelligence::View::new(window, cx);
         let role_form = screens::roles::Form::new(cx);
+        crate::mark(&crate::SHELL_MS);
         Self {
             intel,
             role_form,
@@ -405,7 +407,7 @@ impl Shell {
             project_ui: screens::project::ProjectUi::default(),
             browser_ui: screens::browser::BrowserUi::default(),
             pane: screens::pane::PaneUi::default(),
-            chain_collapsed: false,
+            conversation_menu: false,
             history: History::new(start),
             runs_filter: Default::default(),
             run_focus: None,
@@ -434,6 +436,8 @@ impl Shell {
 
     /// Go to a place.
     pub fn go(&mut self, route: Route, cx: &mut Context<Self>) {
+        // A menu belongs to the screen that opened it, not to the next one.
+        self.conversation_menu = false;
         self.history.select(route);
         self.present(cx);
         cx.notify();
@@ -606,6 +610,19 @@ impl Shell {
         }
         mutation.args = args;
         devd(cx).sync.mutate(mutation);
+        // In a room, a message is said to the team, not only to the assistant: the run's tasks get
+        // it as a direction, so speaking while it works steers the work instead of waiting for the
+        // assistant to relay it. A conversation outside a run has no one else to tell.
+        if let Some(run) = thread
+            .as_ref()
+            .and_then(|id| screens::assistant::run_of_self(id, cx))
+            .filter(|run| screens::assistant::run_open(run, cx))
+        {
+            devd(cx).sync.mutate(
+                Mutation::new("team.say", json!({ "run": run, "text": text }))
+                    .invalidating("team"),
+            );
+        }
         self.compose.files.clear();
         self.composer.update(cx, |input, cx| input.clear(cx));
         if thread.is_none() {
@@ -1779,8 +1796,41 @@ impl Shell {
     }
 }
 
+/// Write down how long this launch took to draw something, once.
+///
+/// The reading is kept beside the state so `perf.measure` can report the last launch instead of
+/// guessing, and so the Speed card shows what a person actually waited for rather than what the
+/// runtime thinks of itself. It is written on the first frame and never again in the process.
+fn note_first_frame(home: &str) {
+    static WRITTEN: std::sync::Once = std::sync::Once::new();
+    WRITTEN.call_once(|| {
+        let Some(started) = crate::STARTED.get() else {
+            return;
+        };
+        let record = serde_json::json!({
+            "ms": started.elapsed().as_secs_f64() * 1000.0,
+            "connect_ms": crate::CONNECTED_MS.get().copied(),
+            "bootstrap_ms": crate::BOOTSTRAP_MS.get().copied(),
+            "serve_ms": crate::SERVE_MS.get().copied(),
+            "theme_ms": crate::THEME_MS.get().copied(),
+            "state_ms": crate::STATE_MS.get().copied(),
+            "dict_ms": crate::DICT_MS.get().copied(),
+            "shell_ms": crate::SHELL_MS.get().copied(),
+            "window_ms": crate::WINDOW_MS.get().copied(),
+            "version": env!("CARGO_PKG_VERSION"),
+            "at": chrono::Utc::now().to_rfc3339(),
+        });
+        let _ = std::fs::write(
+            std::path::Path::new(home).join("startup.json"),
+            record.to_string(),
+        );
+    });
+}
+
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // The first frame is the number a person feels, so it is written down once per launch.
+        note_first_frame(&devd(cx).conn.home);
         // Which conversation is in front is decided again every frame, by the screen that draws one.
         cx.global_mut::<Devd>().open_thread = None;
         // The close button was pressed while a scaffold ran: ask before losing it.

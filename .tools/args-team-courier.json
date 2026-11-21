@@ -1,0 +1,15 @@
+{
+  "project": "D:\\devd\\www\\welcome\\courier",
+  "goal": "Build courier exactly as README.md specifies: enqueue, claim under a lease where exactly one worker wins, ack and nack with 409 for anyone but the lease holder, retry with exponential backoff visible in run_after, dead letters when attempts are exhausted, a sweep that returns expired leases to the queue, listing by state and queue, a page showing queue depth and recent jobs with a Sweep button and an enqueue form, and the key every route but health requires.",
+  "done_when": [
+    "npm test passes and covers enqueue, claim, ack, nack, the 409 for a worker that does not hold the lease, and the invalid-body refusals",
+    "two concurrent claims never return the same job, and the test fires them in parallel rather than in sequence",
+    "a job abandoned by a dead process is claimable again after the service restarts on the same database file, proved by starting a second process",
+    "a nacked job retries with 2^attempts backoff in run_after and becomes dead when attempts reach max_attempts",
+    "the sweep returns expired leases to queued, or to dead when attempts are exhausted, and reports how many it moved",
+    "every route but /api/health answers 401 without the right x-courier-key, and the service refuses to start with no COURIER_KEY",
+    "the page shows depth per queue, counts by state and the ten newest jobs with attempts and last error, with a working enqueue form and Sweep button",
+    "the service starts, the README sequence works against it, and nothing was left listening afterwards"
+  ],
+  "parallel": 2
+}

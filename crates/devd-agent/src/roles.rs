@@ -112,7 +112,11 @@ pub fn rank(t: Tier) -> u8 {
 }
 
 /// Capabilities every team member may use to talk back.
-pub const COMMON: &[&str] = &["team.report", "team.context", "team.charter.get", "inbox.post", "approval.get", "todo.create", "todo.update", "todo.list", "scratch.write", "scratch.read", "skills.get", "skills.list"];
+/// What every member may use whatever its role: the ways it talks to the run, plus the one
+/// capability that lets it put back what it started. A member that runs a server to look at its
+/// own work has to be able to stop it — a listener nobody can stop outlives the task and confuses
+/// the next one that looks at the same port.
+pub const COMMON: &[&str] = &["team.report", "team.context", "team.charter.get", "inbox.post", "approval.get", "todo.create", "todo.update", "todo.list", "scratch.write", "scratch.read", "skills.get", "skills.list", "project.status", "project.stop"];
 
 /// The role files, in roster order: (id, contents).
 const FILES: &[(&str, &str)] = &[

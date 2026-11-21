@@ -11,7 +11,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use devd_app_core::flow::{self, Flow, Metrics, Task};
-use devd_app_core::nav::Route;
 use devd_app_core::status;
 use gpui::{
     AnyElement, ClickEvent, Context, FontWeight, Hsla, PathBuilder, Pixels, Point, ScrollHandle,
@@ -93,20 +92,8 @@ fn frontier(tasks: &[Task]) -> Option<usize> {
 /// What choosing a node does.
 #[derive(Clone)]
 enum Pick {
-    /// Open the agent's conversation; the node of the conversation on screen is marked.
-    Conversation(Option<String>),
     /// Show the agent beside the run's page; the chosen node is marked.
     Agent { run: String, chosen: Option<String> },
-}
-
-/// The graph of a run. `here` is the conversation on screen, whose node is marked; `id` keeps two graphs apart.
-pub fn graph(
-    id: &'static str,
-    tasks: &[Value],
-    here: Option<&str>,
-    cx: &mut Context<Shell>,
-) -> AnyElement {
-    draw(id, tasks, Pick::Conversation(here.map(str::to_string)), cx)
 }
 
 /// The graph on a run's own page: choosing a node shows that agent beside the page, and `chosen` is marked.
@@ -219,7 +206,6 @@ fn draw(id: &'static str, tasks: &[Value], pick: Pick, cx: &mut Context<Shell>) 
     // A long chain is wider than its place. Bring the part that matters into view when it changes: the task working now,
     // or, in a conversation, the agent whose conversation this is. A person who scrolls away is left alone.
     let marked = |task: &Task| match &pick {
-        Pick::Conversation(here) => here.is_some() && task.thread.as_deref() == here.as_deref(),
         Pick::Agent { chosen, .. } => chosen.as_deref() == Some(task.key.as_str()),
     };
     let focus = tasks.iter().position(&marked).or_else(|| frontier(&tasks));
@@ -437,16 +423,6 @@ fn task_node(
         )
         .tooltip(ui::tip(format!("{} — {}", task.title, facts(task))));
     match pick {
-        Pick::Conversation(_) => {
-            if let Some(thread) = task.thread.clone() {
-                node = node
-                    .cursor_pointer()
-                    .hover(move |s| s.bg(hover))
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        this.go(Route::Assistant(Some(thread.clone())), cx)
-                    }));
-            }
-        }
         Pick::Agent { run, .. } => {
             let (run, key) = (run.clone(), task.key.clone());
             node = node

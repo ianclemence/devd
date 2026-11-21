@@ -52,6 +52,20 @@ pub fn serve(
     let claim = Arc::new(std::sync::Mutex::new(claim));
 
     app.resume_agents();
+    // Where the time before this point went, so a slow start is a list rather than a mystery.
+    // Only a long-lived host prints it; a one-line command stays quiet.
+    if let Some(total) = app.startup.last().map(|(_, at)| *at) {
+        let mut phases = Vec::new();
+        let mut previous = 0.0;
+        for (label, at) in &app.startup {
+            phases.push(format!("{label} {:.0}", at - previous));
+            previous = *at;
+        }
+        eprintln!(
+            "devd started in {total:.0} ms: {}",
+            phases.join(" · ")
+        );
+    }
     let candidates = port_candidates(&app, requested);
     let port = candidates
         .iter()

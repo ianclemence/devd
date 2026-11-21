@@ -1,0 +1,15 @@
+{
+  "project": "D:\\devd\\www\\welcome\\quorum",
+  "goal": "Build quorum exactly as README.md specifies: a replicated key-value store of three nodes with per-node SQLite, quorum writes that refuse without a majority, read repair that returns the highest (version, writer) and writes the winner back, versions that never go backwards, honest membership reporting, a page per node, and the cluster key on every route but health including peer-to-peer.",
+  "done_when": [
+    "npm test passes and starts real node processes, not mocks",
+    "a write through one node is readable on another and answers with the number of acks",
+    "with one node stopped a write still succeeds (two of three acks) and with two stopped it is refused with 503 naming the acks",
+    "a refused write is not visible afterwards through a quorum read",
+    "a node that was behind is repaired by a read and the answer says repaired: true",
+    "a lower version never overwrites a higher one and the answer says stale: true",
+    "peer requests have a timeout and a dead peer does not hang a write",
+    "every route but /api/health needs the cluster key, including the peer-to-peer routes"
+  ],
+  "parallel": 2
+}

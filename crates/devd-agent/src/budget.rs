@@ -10,6 +10,12 @@
 
 use devd_core::{RunBudget, RunUsage};
 
+/// Tokens read by one task's conversation after which it is told it has read enough: spend what it
+/// knows, not more of the same. A QA task in a real run reached 634k input tokens writing two test
+/// files, most of it re-reading a tree it had already seen; the cost of a run is not its turns but
+/// the context each turn carries.
+pub const TASK_READ_ENOUGH_TOKENS: i64 = 200_000;
+
 /// Tokens read by one task's conversation after which it is asked to wrap up. Past this a conversation is mostly its own
 /// history, each turn costs more, and the agent reasons worse over it.
 pub const TASK_WRAP_INPUT_TOKENS: i64 = 600_000;
@@ -75,6 +81,13 @@ pub fn standing(budget: RunBudget, usage: RunUsage) -> Standing {
 /// Whether one task's conversation has grown past what it should.
 pub fn task_over(input_tokens: i64, output_tokens: i64) -> bool {
     input_tokens >= TASK_WRAP_INPUT_TOKENS || output_tokens >= TASK_WRAP_OUTPUT_TOKENS
+}
+
+/// What a task is told once it has read enough: spend the context it has, not more of it.
+pub fn read_enough_message(input_tokens: i64) -> String {
+    format!(
+        "You have read {input_tokens} tokens in this task, which is more than this work needs. Stop reading: use what you already know and act. Read only a specific file you must change or a specific error you must understand; when the acceptance criteria are met, verify and report."
+    )
 }
 
 /// What a task is told when it has grown past what it should: finish cleanly, and say what is left.

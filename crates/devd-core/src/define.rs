@@ -117,9 +117,21 @@ impl<A> Define<'_, A> {
         P: Fn(&Ctx, &A) -> Result<Plan> + Send + Sync + 'static,
         Q: Fn(&Ctx, &A) -> Result<Outcome> + Send + Sync + 'static,
     {
-        let schema = serde_json::to_value(schemars::schema_for!(A)).map_err(|e| {
+        let mut schema = serde_json::to_value(schemars::schema_for!(A)).map_err(|e| {
             DevdError::internal(format!("cannot build the schema for {}: {e}", self.id))
         })?;
+        // A capability takes exactly the arguments it declares. Without this, a field with a
+        // typo is not refused — serde ignores it — so a person who writes `turns` instead of
+        // `max_turns` is told "Budget set" and has in fact removed the ceiling. The schema is the
+        // one place that knows the accepted names, so it is the one place that closes them.
+        if let Some(object) = schema.as_object_mut() {
+            if object.contains_key("properties") {
+                object.insert(
+                    "additionalProperties".to_string(),
+                    serde_json::Value::Bool(false),
+                );
+            }
+        }
         let capability = self
             .builder
             .args_schema(schema)
@@ -205,6 +217,9 @@ mod tests {
         // What was not named is false: nobody asked for these.
         assert!(!cap.human_only && !cap.supports_dry_run);
         assert_eq!(cap.args_schema["required"], json!(["text"]));
+        // A field the capability does not declare is refused, not ignored: serde would read this
+        // object happily and the handler would never learn the caller misspelled something.
+        assert_eq!(cap.args_schema["additionalProperties"], json!(false));
     }
 
     #[test]

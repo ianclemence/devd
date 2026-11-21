@@ -2354,6 +2354,443 @@ fn a_template_fills_its_blanks_and_starts_the_team_with_its_definition_of_done()
 }
 
 #[test]
+fn a_team_run_reads_as_one_group_chat_with_a_bubble_for_each_role() {
+    let e = env();
+    // A run with two specialists, each with a conversation of its own.
+    let run = e
+        .human
+        .store
+        .create_run("Group chat", "Ship it", None, 2, "test")
+        .unwrap();
+    let origin = e
+        .human
+        .store
+        .create_thread("The request", None, None, None)
+        .unwrap();
+    e.human.store.set_run_thread(&run.id, &origin.id).unwrap();
+    let mut written = Vec::new();
+    for (key, role) in [("api", "implementer"), ("review", "reviewer")] {
+        let task = e
+            .human
+            .store
+            .add_task(
+                &run.id,
+                devd_core::store_team::NewTask {
+                    key,
+                    role,
+                    title: key,
+                    instructions: "do it",
+                    depends_on: &[],
+                    scope: &[],
+                    criteria: &[],
+                    mandate: None,
+                },
+            )
+            .unwrap();
+        let thread = e
+            .human
+            .store
+            .create_thread(key, None, None, None)
+            .unwrap();
+        e.human
+            .store
+            .update_team_task(
+                &task.id,
+                devd_core::store_team::TaskUpdate {
+                    state: &task.state,
+                    thread_id: Some(&thread.id),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        e.human
+            .store
+            .append_event(&thread.id, "assistant", &json!({ "text": format!("{role} speaking") }))
+            .unwrap();
+        written.push(thread.id);
+    }
+    e.human
+        .store
+        .append_event(&origin.id, "user", &json!({ "text": "please build it" }))
+        .unwrap();
+
+    let log = call(
+        &e,
+        &e.human,
+        "chat.team_log",
+        json!({ "thread": origin.id }),
+        Approval::None,
+    )
+    .unwrap();
+    assert_eq!(log["run"], json!(run.id));
+    let events = log["events"].as_array().unwrap();
+    assert_eq!(events.len(), 3, "the person and both agents: {log}");
+    let roles: Vec<&str> = events
+        .iter()
+        .map(|e| e["role"].as_str().unwrap_or(""))
+        .collect();
+    assert!(roles.contains(&"implementer"), "{roles:?}");
+    assert!(roles.contains(&"reviewer"), "{roles:?}");
+    assert!(
+        events
+            .iter()
+            .any(|e| e["origin"] == json!(true) && e["kind"] == "user"),
+        "the person's own message is in the same list: {log}"
+    );
+    // It is the same conversation whichever side asks: a specialist's log is the run's log.
+    let from_agent = call(
+        &e,
+        &e.human,
+        "chat.team_log",
+        json!({ "thread": written[0].clone() }),
+        Approval::None,
+    )
+    .unwrap();
+    assert_eq!(from_agent["run"], json!(run.id));
+    assert_eq!(from_agent["events"].as_array().unwrap().len(), 3);
+    // The room carries talk between teammates: addressed, tagged with who said it, kept with what
+    // it was about.
+    call(
+        &e,
+        &e.human,
+        "chat.talk",
+        json!({
+            "thread": origin.id,
+            "to": "reviewer",
+            "about": "api",
+            "text": "The parser is done — can you look at the retry loop?"
+        }),
+        Approval::None,
+    )
+    .unwrap();
+    let with_talk = call(
+        &e,
+        &e.human,
+        "chat.team_log",
+        json!({ "thread": written[0].clone() }),
+        Approval::None,
+    )
+    .unwrap();
+    let talk = with_talk["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["kind"] == "agent")
+        .expect("the message is in the room");
+    assert_eq!(talk["data"]["to"], json!("reviewer"));
+    assert_eq!(talk["data"]["about"], json!("api"));
+    assert_eq!(talk["data"]["from"], json!("devd"));
+    // Addressed means delivered: the reviewer's own conversation has it waiting, so it reads the
+    // message at its next step and can answer in the room.
+    let waiting = e.human.store.list_queued(&written[1]).unwrap();
+    assert_eq!(waiting.len(), 1, "the mention reaches the agent it names");
+    assert!(
+        waiting[0].text.contains("can you look at the retry loop"),
+        "{:?}",
+        waiting[0].text
+    );
+    // A room opens on the newest messages, not the oldest: a long run's transcript must not be stuck
+    // at its first day. Six messages, a limit of two, the last two come back in the order said.
+    for n in 0..6 {
+        e.human
+            .store
+            .append_event(&written[1], "assistant", &json!({ "content": [{ "type": "text", "text": format!("step {n}") }] }))
+            .unwrap();
+    }
+    let tail = call(
+        &e,
+        &e.human,
+        "chat.team_log",
+        json!({ "thread": written[0].clone(), "limit": 2 }),
+        Approval::None,
+    )
+    .unwrap();
+    let texts: Vec<String> = tail["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["thread_id"] == json!(written[1]))
+        .filter_map(|e| e["data"]["content"][0]["text"].as_str().map(str::to_string))
+        .collect();
+    assert_eq!(texts, vec!["step 4".to_string(), "step 5".to_string()], "{texts:?}");
+    let refused = call(
+        &e,
+        &e.human,
+        "chat.talk",
+        json!({ "thread": origin.id, "to": "sysadmin", "text": "hello" }),
+        Approval::None,
+    );
+    assert!(refused.is_err(), "an address nobody has is refused");
+}
+
+#[test]
+fn a_conversation_can_be_put_aside_until_a_time_and_woken_by_hand() {
+    let e = env();
+    let t = e
+        .human
+        .store
+        .create_thread("Put aside", None, None, None)
+        .unwrap();
+    let until = (chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339();
+    call(
+        &e,
+        &e.human,
+        "chat.snooze",
+        json!({ "thread": t.id, "until": until }),
+        Approval::None,
+    )
+    .unwrap();
+    let got = e.human.store.get_thread(&t.id).unwrap().unwrap();
+    assert_eq!(
+        got.snoozed_until.as_deref(),
+        Some(until.as_str()),
+        "the instant is stored, so a client that opens later knows when it comes back"
+    );
+
+    // A time that has already passed is refused with a reason rather than accepted silently.
+    let past = (chrono::Utc::now() - chrono::Duration::minutes(1)).to_rfc3339();
+    assert!(
+        call(
+            &e,
+            &e.human,
+            "chat.snooze",
+            json!({ "thread": t.id, "until": past }),
+            Approval::None
+        )
+        .is_err(),
+        "a time that has passed is refused"
+    );
+
+    // Waking it by hand is the same call without a time.
+    call(&e, &e.human, "chat.snooze", json!({ "thread": t.id }), Approval::None).unwrap();
+    assert!(
+        e.human.store.get_thread(&t.id).unwrap().unwrap().snoozed_until.is_none(),
+        "no time means back in the list now"
+    );
+}
+
+#[test]
+fn deleting_a_conversation_takes_an_empty_worktree_and_keeps_one_with_work_in_it() {
+    let e = env();
+    let project = e.root.join("www").join("proj");
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&project)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    };
+    git(&["init", "-q"]);
+    git(&["config", "user.email", "test@example.com"]);
+    git(&["config", "user.name", "Test"]);
+    std::fs::write(project.join("README.md"), "# proj\n").unwrap();
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "first"]);
+
+    let start = |title: &str| {
+        let t = e
+            .human
+            .store
+            .create_thread(title, Some(project.to_str().unwrap()), None, None)
+            .unwrap();
+        let made = call(
+            &e,
+            &e.human,
+            "chat.worktree",
+            json!({ "thread": t.id, "action": "create" }),
+            Approval::None,
+        )
+        .unwrap();
+        (t.id, made["workdir"].as_str().unwrap().to_string())
+    };
+
+    // Nothing in it and nothing unmerged: it goes with the conversation.
+    let (clean, clean_dir) = start("Clean");
+    let gone = call(&e, &e.human, "chat.delete", json!({ "thread": clean }), Approval::Granted).unwrap();
+    assert_eq!(gone["worktree"]["kept"], json!(false), "{gone}");
+    assert!(
+        !std::path::Path::new(&clean_dir).exists(),
+        "an empty worktree is taken with the conversation"
+    );
+
+    // A change that was never committed: the conversation goes, the work does not.
+    let (dirty, dirty_dir) = start("Dirty");
+    std::fs::write(std::path::Path::new(&dirty_dir).join("README.md"), "# changed\n").unwrap();
+    let kept = call(&e, &e.human, "chat.delete", json!({ "thread": dirty }), Approval::Granted).unwrap();
+    assert_eq!(kept["worktree"]["kept"], json!(true), "{kept}");
+    assert_eq!(kept["worktree"]["path"], json!(dirty_dir));
+    assert!(
+        std::path::Path::new(&dirty_dir).exists(),
+        "work that was never committed is never deleted with its conversation"
+    );
+}
+
+#[test]
+fn a_conversation_reports_what_it_changed_and_will_not_open_a_review_before_pushing() {
+    let e = env();
+    let project = e.root.join("www").join("proj");
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&project)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    };
+    git(&["init", "-q"]);
+    git(&["config", "user.email", "test@example.com"]);
+    git(&["config", "user.name", "Test"]);
+    std::fs::write(project.join("README.md"), "# proj\n").unwrap();
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "first"]);
+
+    let thread = e
+        .human
+        .store
+        .create_thread("Ship it", Some(project.to_str().unwrap()), None, None)
+        .unwrap();
+    let made = call(
+        &e,
+        &e.human,
+        "chat.worktree",
+        json!({ "thread": thread.id, "action": "create" }),
+        Approval::None,
+    )
+    .unwrap();
+    let dir = made["workdir"].as_str().unwrap().to_string();
+    std::fs::write(std::path::Path::new(&dir).join("README.md"), "# changed\n").unwrap();
+
+    let changes = call(
+        &e,
+        &e.human,
+        "chat.changes",
+        json!({ "thread": thread.id }),
+        Approval::None,
+    )
+    .unwrap();
+    assert_eq!(changes["files"][0]["path"], "README.md", "{changes}");
+    assert_eq!(changes["files"][0]["words"], "modified");
+    assert_eq!(changes["clean"], json!(false));
+    assert_eq!(changes["branch"], json!(format!("devd/{}", &thread.id[..8])));
+
+    // No upstream: a review of commits the host cannot see is refused with the step to take.
+    let err = call(
+        &e,
+        &e.human,
+        "chat.pr",
+        json!({ "thread": thread.id }),
+        Approval::Granted,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("push the branch first"), "{err}");
+}
+
+#[test]
+fn a_conversation_can_own_a_worktree_and_give_it_back() {
+    let e = env();
+    let project = e.root.join("www").join("proj");
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&project)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    // A worktree needs a commit to stand on.
+    git(&["init", "-q"]);
+    git(&["config", "user.email", "test@example.com"]);
+    git(&["config", "user.name", "Test"]);
+    std::fs::write(project.join("README.md"), "# proj\n").unwrap();
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "first"]);
+
+    let thread = e
+        .human
+        .store
+        .create_thread("Work in a worktree", Some(project.to_str().unwrap()), None, None)
+        .unwrap();
+    let made = call(
+        &e,
+        &e.human,
+        "chat.worktree",
+        json!({ "thread": thread.id, "action": "create" }),
+        Approval::None,
+    )
+    .unwrap();
+    let dir = made["workdir"].as_str().expect("the folder is reported").to_string();
+    assert!(
+        std::path::Path::new(&dir).join(".git").exists(),
+        "the worktree is its own checkout: {made}"
+    );
+    assert_eq!(
+        made["branch"].as_str(),
+        Some(format!("devd/{}", &thread.id[..8]).as_str()),
+        "the branch names the conversation"
+    );
+    assert_eq!(
+        e.human.store.get_thread(&thread.id).unwrap().unwrap().workdir.as_deref(),
+        Some(dir.as_str()),
+        "the conversation records where its tools run"
+    );
+    // A worktree is kept out of the project's own status, like the team's.
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&project)
+        .arg("status")
+        .arg("--porcelain")
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&status.stdout).trim().is_empty(),
+        "a worktree does not dirty the project: {}",
+        String::from_utf8_lossy(&status.stdout)
+    );
+
+    call(
+        &e,
+        &e.human,
+        "chat.worktree",
+        json!({ "thread": thread.id, "action": "detach" }),
+        Approval::None,
+    )
+    .unwrap();
+    assert!(
+        e.human.store.get_thread(&thread.id).unwrap().unwrap().workdir.is_none(),
+        "detaching puts the conversation back on the project"
+    );
+    assert!(
+        std::path::Path::new(&dir).exists(),
+        "detaching does not delete the work the conversation did"
+    );
+}
+
+#[test]
+fn a_conversation_with_a_recorded_cost_still_shows_what_its_cache_saved() {
+    let e = env();
+    call(&e, &e.human, "provider.save", json!({ "id": "deepseek", "preset": "deepseek", "api_key": "sk-test-0123456789abcdef", "default_model": "deepseek-flash" }), Approval::None).unwrap();
+    let thread = e.human.store.create_thread("Priced work", None, Some("deepseek"), Some("deepseek-flash")).unwrap();
+    // The shape every recent conversation has: a cost recorded per call, beside the cache tokens.
+    // The price map used to be filled only when a cost had to be computed, so this row — the common
+    // one — showed "Saved by caching $0.00" against a 90% cache hit.
+    e.human.store.add_thread_usage_full(&thread.id, 10_000_000, 100_000, 9_000_000, 0, Some(0.30)).unwrap();
+
+    let usage = call(&e, &e.human, "models.usage", json!({}), Approval::None).unwrap();
+    let saved = usage["cache_saved_usd"].as_f64().expect("the price is known, so the saving is a number");
+    assert!(saved > 0.0, "a 90% cache saved nothing? {usage}");
+    assert_eq!(usage["by_model"][0]["cache_saved_usd"].as_f64().unwrap(), saved);
+    assert!((usage["cache_hit_rate"].as_f64().unwrap() - 0.9).abs() < 1e-9);
+}
+
+#[test]
 fn a_conversation_recorded_without_a_cost_is_priced_from_the_catalogue_with_its_cache_discount() {
     let e = env();
     // DeepSeek by preset: nothing listed, no price recorded, exactly as the

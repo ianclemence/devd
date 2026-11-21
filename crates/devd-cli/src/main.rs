@@ -81,6 +81,10 @@ pub(crate) enum Command {
         /// Arguments as a JSON object.
         #[arg(long)]
         args: Option<String>,
+        /// Arguments as a JSON object in a file. Use this instead of `--args` from a shell that
+        /// eats the quotes: `--args-file run.json`.
+        #[arg(long, value_name = "PATH")]
+        args_file: Option<std::path::PathBuf>,
         /// A single argument as `key=value`. Repeatable.
         #[arg(long = "arg", value_name = "KEY=VALUE")]
         set: Vec<String>,
@@ -1992,7 +1996,27 @@ fn run(cli: Cli) -> Result<i32> {
             );
             Ok(0)
         }
-        Command::Call { id, args, set } => {
+        Command::Call {
+            id,
+            args,
+            args_file,
+            set,
+        } => {
+            // A JSON object on a Windows command line does not survive the trip intact: the quotes
+            // that make it JSON are the ones the argument parser strips. A file has no such
+            // problem, so the CLI takes one.
+            let args = match (args, args_file) {
+                (Some(_), Some(_)) => {
+                    return Err(devd_core::DevdError::invalid(
+                        "give --args or --args-file, not both",
+                    )
+                    .into());
+                }
+                (None, Some(path)) => Some(std::fs::read_to_string(&path).map_err(|e| {
+                    devd_core::DevdError::invalid(format!("cannot read {}: {e}", path.display()))
+                })?),
+                (args, None) => args,
+            };
             let value = merge_args(args, set)?;
             app.invoke(&id, value)?;
             Ok(0)

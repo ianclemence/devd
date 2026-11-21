@@ -526,6 +526,16 @@ pub fn tab_strip(current: &Route, cx: &mut Context<Shell>) -> Option<Div> {
     Some(strip)
 }
 
+/// A span of time the way a person reads one: milliseconds while they are milliseconds, seconds
+/// once waiting is what is happening.
+fn duration(ms: f64) -> String {
+    if ms >= 1_000.0 {
+        format!("{:.1} s", ms / 1_000.0)
+    } else {
+        format!("{ms:.0} ms")
+    }
+}
+
 fn frame(
     id: &'static str,
     detail: impl Into<SharedString>,
@@ -2828,15 +2838,64 @@ fn diagnostics(cx: &mut Context<Shell>) -> AnyElement {
         cx,
     );
     let setup_card = rows_card(setup, "diagnostics.devd", cx);
+    // Speed, measured rather than asserted. The same readings `devd call perf.measure` returns, on
+    // the screen a person opens when they want to know whether devd is the problem.
+    let perf = read(cx, "perf.measure");
+    let mut speed = Vec::new();
+    if let Some(d) = perf.data.as_deref() {
+        let mut all_inside = true;
+        for m in d["measurements"].as_array().map(Vec::as_slice).unwrap_or(&[]) {
+            let ms = m["ms"].as_f64().unwrap_or(0.0);
+            let budget = m["budget_ms"].as_f64().unwrap_or(0.0);
+            let ok = m["ok"].as_bool().unwrap_or(false);
+            all_inside &= ok;
+            speed.push(Row {
+                title: text(m, "what"),
+                sub: format!("{} now · line {}", duration(ms), duration(budget)),
+                state: Some(if ok {
+                    (Tone::Ok, "inside".to_string())
+                } else {
+                    (Tone::Warn, "over".to_string())
+                }),
+                ..Row::default()
+            });
+        }
+        speed.push(Row {
+            title: "What the lines mean".to_string(),
+            sub: if all_inside {
+                "Every reading is inside its budget. A budget is a regression line, not a target."
+                    .to_string()
+            } else {
+                "A reading is over its line: something in this build got slower, and it is worth explaining before it is accepted."
+                    .to_string()
+            },
+            state: Some(if all_inside {
+                (Tone::Ok, "fast".to_string())
+            } else {
+                (Tone::Warn, "slower".to_string())
+            }),
+            ..Row::default()
+        });
+    }
+    let speed_list = list_or(
+        &perf,
+        speed,
+        "diagnostics.speed",
+        "bolt",
+        "Measuring",
+        "devd times its own work here: the database, the log, and a conversation read back.",
+        cx,
+    );
     let body = vec![
         section("THIS MACHINE", machine_list, cx).into_any_element(),
         section("DEVD", setup_card, cx).into_any_element(),
+        section("SPEED", speed_list, cx).into_any_element(),
     ];
     frame(
         "diagnostics",
-        "What this machine is doing, and what devd needs from it.",
+        "What this machine is doing, what devd needs from it, and how fast devd's own work is.",
         div(),
-        &[&stats],
+        &[&stats, &perf],
         body,
         cx,
     )

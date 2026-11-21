@@ -29,6 +29,9 @@ pub struct Devd {
     pub writing: HashMap<String, String>,
     /// What a model is thinking before it writes, by conversation: when it began and the latest of it.
     pub thinking: HashMap<String, (Instant, String)>,
+    /// Conversations whose reasoning is open. The thought is shown only when the person asks for it,
+    /// by clicking "Thinking" — the way every other assistant's interface behaves.
+    pub thinking_open: std::collections::HashSet<String>,
     /// Things to tell the person once: a write that failed, one that worked.
     pub toasts: Vec<Toast>,
     /// Work that is still running, named while it runs. A scaffold can take a
@@ -232,6 +235,7 @@ pub fn start(conn: Arc<Connection>, cx: &mut App) {
         pending_file: None,
         open_thread: None,
         open_steps: Default::default(),
+        thinking_open: Default::default(),
         steps_toggled: None,
         pending_ui: Vec::new(),
         beat: 0,
@@ -497,14 +501,16 @@ fn apply(signal: Signal, cx: &mut App) {
                     if data["start"] == json!(true) {
                         state.thinking.remove(&thread);
                     }
-                    // Thinking comes before the words. Only the latest of it is kept: it is shown as a glimpse
-                    // that the model is working, not as something to read back.
+                    // Thinking comes before the words. The whole of it is kept for this turn so the
+                    // person can open it, and none of it is shown until they do: reasoning is not
+                    // meant to be read as it streams past, and a tail of it reads as noise.
                     if let Some(piece) = data["thinking"].as_str() {
-                        let (_, tail) = state.thinking.entry(thread.clone()).or_insert_with(|| (Instant::now(), String::new()));
-                        tail.push_str(piece);
-                        let keep = tail.char_indices().rev().nth(280).map(|(i, _)| i).unwrap_or(0);
-                        if keep > 0 {
-                            tail.drain(..keep);
+                        let (_, thought) = state.thinking.entry(thread.clone()).or_insert_with(|| (Instant::now(), String::new()));
+                        thought.push_str(piece);
+                        // Bounded: a runaway thought must not grow the window without limit.
+                        if thought.chars().count() > 40_000 {
+                            let keep = thought.char_indices().rev().nth(40_000).map(|(i, _)| i).unwrap_or(0);
+                            thought.drain(..keep);
                         }
                     }
                     if data["text"].as_str().is_some_and(|t| !t.is_empty()) {
@@ -721,6 +727,16 @@ pub mod q {
     /// One conversation: its events, its run, whether it is working.
     pub fn thread(id: &str) -> QueryKey {
         QueryKey::new("chat.get", json!({ "thread": id }))
+    }
+
+    /// A run's whole conversation: every agent's messages in one room, in the order they happened.
+    pub fn team_log(id: &str) -> QueryKey {
+        QueryKey::new("chat.team_log", json!({ "thread": id }))
+    }
+
+    /// What a conversation's working tree has changed, and where its branch is.
+    pub fn thread_changes(id: &str) -> QueryKey {
+        QueryKey::new("chat.changes", json!({ "thread": id }))
     }
 
     /// How a conversation's events are read in pieces.

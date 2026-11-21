@@ -50,6 +50,8 @@ const MIGRATIONS: &[(i32, &str)] = &[
     (28, include_str!("../sql/028_team_effort.sql")),
     (29, include_str!("../sql/029_effort_and_calibration.sql")),
     (30, include_str!("../sql/030_chat_search.sql")),
+    (31, include_str!("../sql/031_chat_worktree.sql")),
+    (32, include_str!("../sql/032_chat_snooze.sql")),
 ];
 
 /// The newest schema this build knows. A database below it is migrated the first time devd

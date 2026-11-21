@@ -1111,6 +1111,28 @@ pub fn ago(rfc3339: &str) -> String {
     }
 }
 
+/// When something is due, in the same voice as [`ago`]: "until 21:00", "until 09:00 tomorrow".
+///
+/// It is the mirror of `ago` on purpose: a list that says how long ago a conversation moved should
+/// say when a snoozed one comes back, not how many hours are left to sit through.
+pub fn due_at(rfc3339: &str) -> String {
+    let Ok(at) = chrono::DateTime::parse_from_rfc3339(rfc3339) else {
+        return String::new();
+    };
+    let at = at.with_timezone(&chrono::Local);
+    let now = chrono::Local::now();
+    if at <= now {
+        return "now".into();
+    }
+    let days = (at.date_naive() - now.date_naive()).num_days();
+    let clock = at.format("%H:%M");
+    match days {
+        0 => format!("until {clock}"),
+        1 => format!("until {clock} tomorrow"),
+        _ => format!("until {}", at.format("%a %H:%M")),
+    }
+}
+
 /// A count with a unit a person reads: 1,234,567 tokens is "1.2M".
 pub fn compact(n: u64) -> String {
     match n {

@@ -254,6 +254,15 @@ pub fn needs_final_verification(real: &[&TeamTask]) -> bool {
 pub fn check(run: &TeamRun, tasks: &[TeamTask], pending_approvals: usize) -> Completion {
     let real: Vec<&TeamTask> = tasks.iter().filter(|t| t.role != "planner").collect();
     let mut reasons = Vec::new();
+    // Reasons are read by a person, not by the scheduler: the task's own title says what is not
+    // finished, where its key said only "page".
+    let name = |t: &TeamTask| -> String {
+        if t.title.trim().is_empty() {
+            t.key.clone()
+        } else {
+            format!("\"{}\"", t.title.trim())
+        }
+    };
 
     // Work that is not in a terminal state stops completion regardless of what
     // any other task says.
@@ -264,14 +273,18 @@ pub fn check(run: &TeamRun, tasks: &[TeamTask], pending_approvals: usize) -> Com
         ) {
             reasons.push(format!(
                 "{} is still {}",
-                t.key,
+                name(t),
                 t.state.replace('_', " ")
             ));
         }
-        if t.state != "skipped" {
+        // A failure kind is history the task keeps: what went wrong once. It only stops the run
+        // while the task is still not finished, because a task that ended `done` has answered it
+        // — the record of the earlier stop stays visible in its events and its error, and citing
+        // it as a reason not to finish would make a run that recovered unable to ever complete.
+        if t.state != "skipped" && t.state != "done" {
             if let Some(kind) = &t.failure_kind {
                 if matches!(kind.as_str(), "policy" | "environment" | "pre-existing") {
-                    reasons.push(format!("{} stopped: {}", t.key, t.error.clone().unwrap_or_else(|| kind.clone())));
+                    reasons.push(format!("{} stopped: {}", name(t), t.error.clone().unwrap_or_else(|| kind.clone())));
                 }
             }
         }
@@ -437,6 +450,24 @@ mod tests {
             base_commit: None,
             effort: None,
         }
+    }
+
+    /// A task that stopped once and then finished has answered its own stop: the history stays in
+    /// its failure kind, and the run must be able to complete on the finished work.
+    #[test]
+    fn a_task_that_recovered_does_not_stop_the_run() {
+        let mut page = task("page", "frontend", "done", "The board is drawn and the tests pass.");
+        page.failure_kind = Some("environment".into());
+        page.error = Some("the project has uncommitted changes, so devd will not merge into it".into());
+        let mut gate = task("final-verify", "qa", "done", "Everything README asks for is in place; 17/17 pass.");
+        gate.verdict = Some("approve".into());
+        let done = check(&run(), &[page, gate], 0);
+        assert!(
+            done.reasons.iter().all(|r| !r.starts_with("page stopped")),
+            "a finished task is not still stopped: {:?}",
+            done.reasons
+        );
+        assert_eq!(done.verdict, Some(Verdict::Approve), "{:?}", done.reasons);
     }
 
     #[test]

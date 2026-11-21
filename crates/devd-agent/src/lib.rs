@@ -82,6 +82,9 @@ pub mod team_stats;
 pub mod web;
 pub mod templates;
 pub mod workflows;
+pub mod worktree;
+pub mod ship;
+pub mod perf;
 
 pub use chat::Hub;
 pub use needs::Needs;

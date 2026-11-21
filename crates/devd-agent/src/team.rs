@@ -48,6 +48,55 @@ pub const MAX_TASKS: usize = 14;
 /// Most times a task is started before a person has to look at it.
 pub const MAX_ATTEMPTS: i64 = 3;
 
+/// How many times a task may be retried because the provider could not be reached. It is larger
+/// than [`MAX_ATTEMPTS`] and does not consume it: a network is retried, work is not.
+const MAX_NETWORK_RETRIES: usize = 8;
+
+/// Whether a stop was the provider or the network rather than the task.
+fn is_network_failure(why: &str) -> bool {
+    let why = why.to_ascii_lowercase();
+    [
+        "did not answer in time",
+        "could not find",
+        "closed the connection",
+        "connection reset",
+        "connection refused",
+        "econnrefused",
+        "enotfound",
+        "etimedout",
+        "timed out",
+        "network",
+        "offline",
+        "unreachable",
+        "dns",
+    ]
+    .iter()
+    .any(|needle| why.contains(needle))
+}
+
+/// Whether the provider refused because the account has no money left.
+///
+/// This is not a failure of the work and not a network problem: nothing the agent does can fix it,
+/// and the fix is a person topping up an account. The task therefore keeps its attempts, waits a
+/// minute, and tries again — so the run finishes on its own once the balance is back.
+fn is_billing_failure(why: &str) -> bool {
+    let why = why.to_ascii_lowercase();
+    [
+        "out of credit",
+        "insufficient balance",
+        "insufficient_balance",
+        "needs billing",
+        "billing set up",
+        "payment required",
+        "credit balance",
+        "http 402",
+        "quota exceeded",
+        "exceeded your current quota",
+    ]
+    .iter()
+    .any(|needle| why.contains(needle))
+}
+
 /// What a run may spend in model turns when the person set no ceiling: enough for several tasks,
 /// small enough that a runaway is paused and shown beside the run rather than discovered later.
 pub const DEFAULT_RUN_TURNS: i64 = 160;
@@ -232,6 +281,37 @@ const VERIFY_TASKS: &[&str] = &[
     "fmt-check",
 ];
 
+/// Whether a program run through `project.exec` is one of the project's own checks.
+///
+/// The same command can be reached two ways: `project.run {task:"test"}` runs the task the project
+/// declares, and `project.exec {argv:["npm","test"]}` runs the same thing by hand. Only the first
+/// used to count as a verification, so a member that proved its work through `project.exec` had its
+/// report rejected for "no verification command" while the output showed 12 green tests. A runner
+/// and a subcommand are matched exactly, never a shell string, so this cannot be widened by
+/// wrapping something else in `bash -c`.
+fn check_command(argv: &[String]) -> bool {
+    let words: Vec<String> = argv.iter().map(|a| a.to_ascii_lowercase()).collect();
+    let is_check = |word: &str| VERIFY_TASKS.contains(&word);
+    match words.as_slice() {
+        [runner, sub, ..] if runner == "npm" || runner == "pnpm" || runner == "yarn" || runner == "bun" => {
+            sub == "test" || sub == "t" || (sub == "run" && words.get(2).is_some_and(|w| is_check(w)))
+        }
+        [runner, sub, ..] if runner == "cargo" => matches!(sub.as_str(), "test" | "check" | "clippy" | "build"),
+        [runner, sub, ..] if runner == "go" => matches!(sub.as_str(), "test" | "vet" | "build"),
+        [runner, flag, ..] if runner == "node" => flag == "--test" || flag == "--run-tests",
+        [runner, ..] if runner == "pytest" || runner == "tox" || runner == "nox" => true,
+        [runner, flag, ..] if runner == "python" || runner == "python3" => flag == "-m" && words.get(2).is_some_and(|w| w == "pytest"),
+        [runner, sub, ..] if runner == "dotnet" => matches!(sub.as_str(), "test" | "build"),
+        [runner, sub, ..] if runner == "mvn" || runner == "gradle" || runner == "./gradlew" => is_check(sub),
+        [runner, sub, ..] if runner == "make" => is_check(sub),
+        [runner, sub, ..] if runner == "mix" => sub == "test",
+        [runner, sub, ..] if runner == "bundle" || runner == "rake" => sub == "exec" || sub == "test",
+        [runner, sub, ..] if runner == "php" => sub == "artisan" && words.get(2).is_some_and(|w| w == "test"),
+        [runner, sub, ..] if runner == "composer" => sub == "test",
+        _ => false,
+    }
+}
+
 /// A task as the planner submits it.
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct PlanTask {
@@ -350,22 +430,17 @@ pub fn evidence(events: &[ChatEvent]) -> Vec<Value> {
                         let exit = data["exit_code"].as_i64();
                         let passed =
                             outcome_ok && data["ok"].as_bool().unwrap_or(false) && exit == Some(0);
-                        let is_verify = cap == "project.run"
-                            && VERIFY_TASKS.contains(&task.to_ascii_lowercase().as_str());
+                        let argv: Vec<String> = args["argv"]
+                            .as_array()
+                            .map(|a| a.iter().filter_map(|x| x.as_str()).map(str::to_string).collect())
+                            .unwrap_or_default();
+                        let is_verify = (cap == "project.run"
+                            && VERIFY_TASKS.contains(&task.to_ascii_lowercase().as_str()))
+                            || (cap != "project.run" && check_command(&argv));
                         let label = if cap == "project.run" {
                             format!("task `{task}`")
                         } else {
-                            format!(
-                                "`{}`",
-                                args["argv"]
-                                    .as_array()
-                                    .map(|a| a
-                                        .iter()
-                                        .filter_map(|x| x.as_str())
-                                        .collect::<Vec<_>>()
-                                        .join(" "))
-                                    .unwrap_or_default()
-                            )
+                            format!("`{}`", argv.join(" "))
                         };
                         out.push(json!({ "kind": if is_verify { "verify" } else { "command" }, "capability": cap, "ok": passed, "exit_code": exit, "summary": label }));
                     }
@@ -644,6 +719,12 @@ fn task_brief(
     if !directions.is_empty() {
         s.push_str(&format!("\n# Instructions the person added while the work was under way (they take priority)\n{}\n", directions.iter().map(|d| format!("- {d}")).collect::<Vec<_>>().join("\n")));
     }
+    // The room: a run is one conversation, and a member who cannot speak in it is a private chat the
+    // person has to hunt for. It is short because it is read on every task, and it says what the
+    // member can do rather than describing the mechanism.
+    s.push_str(
+        "\n# The room\nEvery member of this run is in one conversation with the person, and you speak in it with `chat.talk`: `to` names a member (the same names the roster uses), `about` names the task or step you are talking about. A message another member addresses to you arrives here as a message from them. Use it to ask the member who wrote something a question, to say what you found in their change, and to answer anyone who addresses you. Comment on the work rather than the person: name what you would change and why.\n",
+    );
     if let Some(feedback) = t.error.as_ref().filter(|_| t.attempts > 0) {
         s.push_str(&format!(
             "\n# Why the previous attempt was not accepted\n{feedback}\n"
@@ -686,6 +767,14 @@ pub struct Team {
     wrapped: Mutex<HashSet<String>>,
     /// Runs already told they are near a ceiling, so it is said once.
     warned: Mutex<HashSet<String>>,
+    /// Runs that have spent the one automatic extension they are given when they reach a ceiling
+    /// while still working, so a second ceiling stops and asks a person.
+    extended: Mutex<HashSet<String>>,
+    /// Tasks already told they have read enough, so the word is said once.
+    read_enough: Mutex<HashSet<String>>,
+    /// Tasks held for a minute because the provider asked for money, so the account can be topped
+    /// up without the scheduler hammering it and without a person finding the failed task.
+    credit_hold: Mutex<HashMap<String, std::time::Instant>>,
 }
 
 fn is_done(state: &str) -> bool {
@@ -815,6 +904,9 @@ impl Team {
             stop: Mutex::new(HashMap::new()),
             wrapped: Mutex::new(HashSet::new()),
             warned: Mutex::new(HashSet::new()),
+            extended: Mutex::new(HashSet::new()),
+            read_enough: Mutex::new(HashSet::new()),
+            credit_hold: Mutex::new(HashMap::new()),
         })
     }
 
@@ -1081,7 +1173,36 @@ impl Team {
                 false
             }
             crate::budget::Standing::Reached(words) => {
-                let why = format!("Budget reached: {words}. The work so far is kept. Raise the budget (team.budget) and resume to continue.");
+                // A run that is still moving gets one extension of its own, recorded, instead of
+                // stopping for a person. The ceiling bounds spending nobody asked for; it should
+                // not interrupt work that is plainly progressing, and a person asked to press
+                // "raise" mid-job is the harness asking to be babysat. Once per run: a second
+                // ceiling is a real answer, not another chance.
+                let first_extension = self
+                    .extended
+                    .lock()
+                    .map(|mut seen| seen.insert(run.id.clone()))
+                    .unwrap_or(false);
+                let tasks = self.ctx.store.list_tasks_of_run(&run.id).unwrap_or_default();
+                let moving = tasks.iter().any(|t| is_active(&t.state))
+                    && !tasks.iter().any(|t| t.state == "failed");
+                if first_extension && moving {
+                    let more = (usage.turns / 2).max(40);
+                    if self.ctx.store.extend_run_budget(&run.id, more).is_ok() {
+                        self.event(
+                            &run.id,
+                            None,
+                            "budget_extended",
+                            json!({ "words": words, "spent_usd": usage.cost_usd, "turns": usage.turns, "added_turns": more }),
+                        );
+                        self.say_in_requester(
+                            run,
+                            &format!("The run reached its ceiling ({words}) while it was still working, so devd gave it {more} more turns once. It will pause at the next ceiling; team.budget raises it."),
+                        );
+                        return false;
+                    }
+                }
+                let why = format!("{}: {words}. The work so far is kept. Raise the budget (team.budget) and resume to continue.", devd_core::runs::BUDGET_REACHED);
                 let _ = self
                     .ctx
                     .store
@@ -1107,6 +1228,29 @@ impl Team {
             let Ok(Some(thread)) = self.ctx.store.get_thread(tid) else {
                 continue;
             };
+            // Before the wrap-up, the cheaper word: a task that has read a great deal is usually
+            // re-reading rather than learning, and every turn carries all of it again.
+            if thread.input_tokens >= crate::budget::TASK_READ_ENOUGH_TOKENS
+                && !crate::budget::task_over(thread.input_tokens, thread.output_tokens)
+            {
+                let first = self
+                    .read_enough
+                    .lock()
+                    .map(|mut w| w.insert(t.id.clone()))
+                    .unwrap_or(false);
+                if first {
+                    let _ = self
+                        .hub
+                        .follow_up(tid, &crate::budget::read_enough_message(thread.input_tokens));
+                    self.event(
+                        &t.run_id,
+                        Some(&t.id),
+                        "read_enough",
+                        json!({ "task": t.key, "input_tokens": thread.input_tokens }),
+                    );
+                }
+                continue;
+            }
             if !crate::budget::task_over(thread.input_tokens, thread.output_tokens) {
                 continue;
             }
@@ -1179,7 +1323,7 @@ impl Team {
             && run
                 .error
                 .as_deref()
-                .is_some_and(|e| e.starts_with("Budget reached"));
+                .is_some_and(devd_core::runs::at_budget);
         if was_budget
             && matches!(
                 crate::budget::standing(
@@ -2303,6 +2447,42 @@ impl Team {
         Ok(true)
     }
 
+    /// A task that could not merge because the project's tree had someone else's unfinished work in
+    /// it is not a failed task: it is a task that arrived too early. Once the tree is clean and
+    /// nothing else in the run is writing, it is put back to work by itself, so a person does not
+    /// have to notice and press retry for work that is already finished.
+    fn unstick_merge_blocked(self: &Arc<Self>, run: &TeamRun, tasks: &[TeamTask]) {
+        let Some(project) = run.project.as_deref().map(Path::new) else {
+            return;
+        };
+        if !project.join(".git").exists() {
+            return;
+        }
+        let blocked: Vec<&TeamTask> = tasks
+            .iter()
+            .filter(|t| {
+                t.state == "blocked"
+                    && t.failure_kind.as_deref() == Some("merge")
+                    && t.attempts < 3
+            })
+            .collect();
+        if blocked.is_empty() || tasks.iter().any(|t| is_active(&t.state)) {
+            return;
+        }
+        let Ok(status) = self.git_run(project, &["status", "--porcelain"]) else {
+            return;
+        };
+        if !status.ok() || !status.stdout.trim().is_empty() {
+            return;
+        }
+        for t in blocked {
+            let note = "The project's tree is clean now, so the merge that was refused can go ahead.";
+            if let Err(why) = self.retry(&self.ctx, &t.id, Some(note)) {
+                self.event(&run.id, Some(&t.id), "retry_failed", json!({ "task": t.key, "why": why.to_string() }));
+            }
+        }
+    }
+
     fn tick(self: &Arc<Self>, run: &TeamRun) -> Result<bool> {
         let tasks = self.ctx.store.list_tasks_of_run(&run.id)?;
         // What is alive but not progressing is found before the scheduler decides
@@ -2313,6 +2493,7 @@ impl Team {
             return Ok(true);
         }
         self.wrap_up_long_tasks(&tasks);
+        self.unstick_merge_blocked(run, &tasks);
         for t in tasks.iter().filter(|t| is_active(&t.state)) {
             if let Some(project) = &run.project {
                 if roles::get(&t.role).map(|r| r.writes).unwrap_or(false) && t.branch.is_none() {
@@ -2337,6 +2518,12 @@ impl Team {
             .iter()
             .filter(|t| t.state == "pending" && t.role != "planner")
         {
+            // A task held back because the provider wanted money is not started until the hold
+            // expires: retrying a billing refusal every tick is a request storm, and the account
+            // is not going to have credit between two ticks.
+            if self.credit_held(&t.id) {
+                continue;
+            }
             if active + started >= run.parallel {
                 break;
             }
@@ -2491,7 +2678,14 @@ impl Team {
     /// Whether this task works in its own copy of the project.
     fn will_isolate(&self, run: &TeamRun, t: &TeamTask, tasks: &[TeamTask]) -> bool {
         let role = roles::get(&t.role).expect("validated");
-        if !role.isolated || run.parallel < 2 {
+        // Anything that can leave files in the project's tree needs its own copy. The scope is one
+        // signal, but a QA task given no scope at all still writes tests — one did, straight into
+        // the shared tree, which is the same bug this check was meant to close: its edits sit in the
+        // tree until someone commits them, and a merge into that tree is refused. A verification
+        // task is the exception: it reads the merged result, which is the whole point of it.
+        let verification = t.key == "final-verify" || t.key == "acceptance" || t.key.ends_with("-verify");
+        let leaves_files = role.writes || !t.scope.is_empty() || (role.id == "qa" && !verification);
+        if !(role.isolated || leaves_files) || run.parallel < 2 {
             return false;
         }
         let Some(project) = run.project.as_deref().map(Path::new) else {
@@ -2788,9 +2982,96 @@ impl Team {
         Ok(())
     }
 
+    /// Whether a task is still inside the minute it waits after the provider asked for money.
+    fn credit_held(&self, task_id: &str) -> bool {
+        let Ok(mut holds) = self.credit_hold.lock() else {
+            return false;
+        };
+        match holds.get(task_id) {
+            Some(until) if std::time::Instant::now() < *until => true,
+            Some(_) => {
+                holds.remove(task_id);
+                false
+            }
+            None => false,
+        }
+    }
+
+    /// Whether a stop was the network rather than the work.
+    ///
+    /// A provider that cannot be reached is not the task failing: the conversation ended with an
+    /// error devd itself recorded, and the same attempt is owed another go. These are counted
+    /// separately from the task's own attempts, because three DNS blips in a row should not close
+    /// work that was one step from finishing — which is exactly what happened to a page task in a
+    /// real run.
+    fn network_retries(&self, run_id: &str, key: &str) -> usize {
+        self.ctx
+            .store
+            .list_team_events(run_id, 0, 500)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|e| {
+                e.kind == "retrying"
+                    && e.data["task"] == json!(key)
+                    && e.data["network"] == json!(true)
+            })
+            .count()
+    }
+
     fn failed(self: &Arc<Self>, run: &TeamRun, t: &TeamTask, why: &str) -> Result<()> {
         if let Some(project) = &run.project {
             let _ = self.ctx.store.release_write_lease(project, &t.id, &t.id);
+        }
+        // An account without credit is not a failed task and not a failed run: it is a bill. The
+        // task goes back to pending, costs no attempt, and is held for a minute; when the person
+        // tops up, the next start simply works, and nobody has to find the failed task and retry it
+        // by hand — which is what a real run needed.
+        if is_billing_failure(why) {
+            if let Ok(mut holds) = self.credit_hold.lock() {
+                holds.insert(t.id.clone(), std::time::Instant::now() + std::time::Duration::from_secs(60));
+            }
+            self.ctx.store.update_team_task(
+                &t.id,
+                TaskUpdate {
+                    state: "pending",
+                    error: Some(&format!(
+                        "The provider needs credit: {why}. The task will be tried again by itself once the account can answer; nothing was lost and no attempt was used."
+                    )),
+                    ..Default::default()
+                },
+            )?;
+            self.event(
+                &run.id,
+                Some(&t.id),
+                "needs_credit",
+                json!({ "task": t.key, "why": why, "retry_in_seconds": 60 }),
+            );
+            self.say_in_requester(
+                run,
+                &format!("The provider wants credit ({why}). The work is kept; devd will retry the task by itself every minute until the account can answer, without using up the task's attempts."),
+            );
+            return Ok(());
+        }
+        let network = is_network_failure(why);
+        let tried = if network { self.network_retries(&run.id, &t.key) } else { MAX_ATTEMPTS as usize };
+        if network && tried < MAX_NETWORK_RETRIES {
+            self.ctx.store.update_team_task(
+                &t.id,
+                TaskUpdate {
+                    state: "pending",
+                    error: Some(&format!(
+                        "The provider could not be reached ({why}). Nothing was lost; it is being tried again without using up the task's attempts."
+                    )),
+                    ..Default::default()
+                },
+            )?;
+            self.event(
+                &run.id,
+                Some(&t.id),
+                "retrying",
+                json!({ "task": t.key, "attempt": t.attempts, "why": why, "network": true }),
+            );
+            return Ok(());
         }
         if t.attempts < MAX_ATTEMPTS {
             self.ctx.store.update_team_task(
@@ -3248,11 +3529,36 @@ impl Team {
                 &format!(
                     "{} finished: {} ({done} of {} tasks done)",
                     t.key,
-                    util::truncate(handoff.summary.lines().next().unwrap_or(""), 140),
+                    Self::first_sentence(&handoff.summary, 180),
                     work.len()
                 ),
             );
         }
+    }
+
+    /// The first sentence of what a task reported, for the line posted into the conversation that
+    /// asked for the run.
+    ///
+    /// A person reads a sentence; the whole report is in the run, one click away. It ends at a full
+    /// stop that ends a sentence (a version or a path dot is not one), otherwise at a word boundary,
+    /// and it never writes a byte count at somebody.
+    fn first_sentence(text: &str, max: usize) -> String {
+        let t = text.trim();
+        let mut end = t.len();
+        for (i, c) in t.char_indices() {
+            if i >= 24 && matches!(c, '.' | '!' | '?') {
+                let after = t[i + c.len_utf8()..].chars().next();
+                if after.is_none() || after == Some(' ') {
+                    end = i + c.len_utf8();
+                    break;
+                }
+            }
+        }
+        let sentence = t[..end].trim();
+        if sentence.chars().count() <= max {
+            return sentence.to_string();
+        }
+        short_title(sentence, max)
     }
 
     /// A gatekeeper asked for changes: hand the findings back to the member who wrote
@@ -4043,6 +4349,107 @@ pub fn validate_plan(tasks: &[PlanTask]) -> Result<()> {
 }
 
 #[cfg(test)]
+mod network_tests {
+    use super::{is_billing_failure, is_network_failure};
+
+    /// The refusal a real run stopped on, verbatim, and the shapes the same thing takes elsewhere.
+    #[test]
+    fn an_account_without_credit_is_a_bill_not_a_failure() {
+        for why in [
+            "permission denied: DeepSeek says this account is out of credit or needs billing set up (HTTP 402): Insufficient Balance",
+            "402 Payment Required",
+            "you exceeded your current quota, please check your plan and billing details",
+        ] {
+            assert!(is_billing_failure(why), "{why}");
+            assert!(!is_network_failure(why), "a bill is not the network: {why}");
+        }
+        for why in [
+            "it stopped without reporting",
+            "the tests failed: 3 of 17",
+            "api.deepseek.com did not answer in time",
+        ] {
+            assert!(!is_billing_failure(why), "{why}");
+        }
+    }
+
+    /// The three stops a page task hit in one run, verbatim: the network, not the work.
+    #[test]
+    fn a_provider_that_cannot_be_reached_is_the_network_not_the_task() {
+        for why in [
+            "api.deepseek.com did not answer in time. The network may be slow, or the service busy.",
+            "devd could not find api.deepseek.com. Check the address and that you are online.",
+            "api.deepseek.com closed the connection before it answered.",
+            "error sending request: connection refused (os error 10061)",
+        ] {
+            assert!(is_network_failure(why), "{why}");
+        }
+    }
+
+    #[test]
+    fn work_that_failed_is_not_the_network() {
+        for why in [
+            "it stopped without reporting",
+            "no verification command (test, build, lint or check) was run",
+            "the tests failed: 3 of 17",
+            "the project has uncommitted changes, so devd will not merge into it",
+        ] {
+            assert!(!is_network_failure(why), "{why}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod check_command_tests {
+    use super::check_command;
+
+    fn argv(words: &[&str]) -> Vec<String> {
+        words.iter().map(|w| w.to_string()).collect()
+    }
+
+    /// The same command by hand is the same proof: a member that ran `npm test` through
+    /// `project.exec` did verify its work, and the pulse run's frontend was rejected for it.
+    #[test]
+    fn a_project_check_run_by_hand_counts_as_a_verification() {
+        for command in [
+            vec!["npm", "test"],
+            vec!["npm", "run", "test"],
+            vec!["npm", "run", "check"],
+            vec!["pnpm", "test"],
+            vec!["yarn", "test"],
+            vec!["cargo", "test"],
+            vec!["cargo", "clippy"],
+            vec!["go", "test", "./..."],
+            vec!["go", "vet", "./..."],
+            vec!["node", "--test"],
+            vec!["pytest", "-q"],
+            vec!["python", "-m", "pytest"],
+            vec!["dotnet", "test"],
+            vec!["make", "check"],
+            vec!["mix", "test"],
+            vec!["php", "artisan", "test"],
+            vec!["composer", "test"],
+        ] {
+            assert!(check_command(&argv(&command)), "{command:?}");
+        }
+    }
+
+    #[test]
+    fn something_that_is_not_a_check_is_not_one() {
+        for command in [
+            vec!["npm", "start"],
+            vec!["npm", "run", "dev"],
+            vec!["node", "src/server.js"],
+            vec!["bash", "-c", "npm test"],
+            vec!["node", "-e", "fetch('https://example.com')"],
+            vec!["git", "push", "origin", "main"],
+            vec!["echo", "tests passed"],
+        ] {
+            assert!(!check_command(&argv(&command)), "{command:?} is not a check");
+        }
+    }
+}
+
+#[cfg(test)]
 mod verdict_tests {
     use super::verdict_needs_changes;
 
@@ -4181,6 +4588,9 @@ mod brief_tests {
         let full = task_brief(&s, &home, &run, &t, tasks, true);
         let again = task_brief(&s, &home, &run, &t, tasks, false);
         assert!(full.contains("THE WHOLE GOAL") && full.contains("THE INSTRUCTIONS"));
+        // Every member is told the room exists, on both the first brief and a restart: a member that
+        // does not know it can speak cannot ask, comment on a change, or answer a teammate.
+        assert!(full.contains("# The room") && again.contains("# The room"));
         assert!(
             !again.contains("THE WHOLE GOAL") && !again.contains("THE INSTRUCTIONS"),
             "the restart must not pay for the brief it already has: {again}"
@@ -4265,5 +4675,38 @@ mod title_tests {
         assert!(t.ends_with('…') && t.chars().count() <= 70, "{t}");
         assert!(t.ends_with("in Go…"), "{t}");
         assert_eq!(short_title("Short goal", 70), "Short goal");
+    }
+}
+
+#[cfg(test)]
+mod notice_tests {
+    use super::Team;
+
+    // The summary this run actually reported: 1,824 bytes, of which the old note kept 140 and then said
+    // "[truncated 1684 bytes]" at the person.
+    const REPORT: &str = "Built the scheduling half of package scheduler (commit e61d108, 5 files, 1702 insertions; store/, cron/ and api/ untouched). scheduler/scheduler.go holds Scheduler/Options/New/Start/Run/Shutdown/Trigger/Done, the due loop over the injectable Clock, crash recovery and the missed-slot report; overlap.go holds the skip/queue/allow decisions plus the busy/pending accounting that lets Shutdown know when nothing is in flight.";
+
+    #[test]
+    fn a_finished_task_is_announced_in_a_sentence_not_a_byte_count() {
+        let said = Team::first_sentence(REPORT, 180);
+        assert_eq!(
+            said,
+            "Built the scheduling half of package scheduler (commit e61d108, 5 files, 1702 insertions; store/, cron/ and api/ untouched)."
+        );
+        assert!(!said.contains("truncated"), "{said}");
+    }
+
+    #[test]
+    fn a_sentence_with_no_full_stop_is_cut_at_a_word_with_an_ellipsis() {
+        let said = Team::first_sentence(&"word ".repeat(200), 60);
+        assert!(said.ends_with('…'), "{said}");
+        assert!(said.chars().count() <= 60, "{said}");
+        assert!(!said.contains("truncated"), "{said}");
+    }
+
+    #[test]
+    fn a_dot_inside_a_path_or_a_version_does_not_end_the_sentence() {
+        let said = Team::first_sentence("Fixed go.mod and api/v2 to agree, then ran the suite. It passed.", 180);
+        assert_eq!(said, "Fixed go.mod and api/v2 to agree, then ran the suite.");
     }
 }

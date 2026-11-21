@@ -800,6 +800,17 @@ fn prune_cutoff(days: Option<u64>) -> String {
     }
 }
 
+/// What became of a conversation's worktree when the conversation is deleted, if it had one.
+fn end_worktree(t: &devd_core::store_ai::ChatThread) -> Option<(String, crate::worktree::End)> {
+    let dir = t.workdir.clone()?;
+    let project = t.project.clone()?;
+    let end = crate::worktree::end(
+        std::path::Path::new(&project),
+        std::path::Path::new(&dir),
+    );
+    Some((dir, end))
+}
+
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct RunRef {
     /// Run id.
@@ -1212,6 +1223,29 @@ struct SendArgs {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct TalkArgs {
+    /// The conversation the message belongs to: any conversation of the run.
+    thread: String,
+    /// The role it is addressed to, when it is addressed to one.
+    #[serde(default)]
+    to: Option<String>,
+    /// What it is about: a task's key, or the step being discussed.
+    #[serde(default)]
+    about: Option<String>,
+    /// What was said.
+    text: String,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct TeamLogArgs {
+    /// Any conversation of the run: the one that asked for it, or one of its agents.
+    thread: String,
+    /// How many of the most recent events to take from each conversation.
+    #[serde(default)]
+    limit: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct ThreadArgs {
     /// Conversation id.
     thread: String,
@@ -1235,6 +1269,13 @@ struct ResultArgs {
 
 /// How much of a tool result a brief read carries.
 const RESULT_PREVIEW: usize = 1600;
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+/// A message about to be sent, to ask how it would be handled before it is.
+pub struct SuggestModeArgs {
+    /// What the person has written so far.
+    text: String,
+}
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct UpdateThread {
@@ -1261,12 +1302,51 @@ struct LinkPullRequest {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct SnoozeThread {
+    /// Conversation id.
+    thread: String,
+    /// When it comes back, as an RFC 3339 instant. Absent wakes it now.
+    #[serde(default)]
+    until: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct SettleThread {
     /// Conversation id.
     thread: String,
     /// True to settle it, false to reopen it. Default true.
     #[serde(default)]
     settled: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct ChatWorktree {
+    /// Conversation id.
+    thread: String,
+    /// `create` makes a worktree for this conversation, `attach` points it at one that exists,
+    /// `detach` puts it back on the project's own folder.
+    action: String,
+    /// The folder, for `attach`.
+    #[serde(default)]
+    path: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct ShipArgs {
+    /// Conversation id.
+    thread: String,
+    /// The pull request title; leave it out and the host fills it from the commits.
+    #[serde(default)]
+    title: Option<String>,
+    /// The pull request body.
+    #[serde(default)]
+    body: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct ShipChangesArgs {
+    /// Conversation id.
+    thread: String,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -1845,6 +1925,27 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
         },
     )?;
 
+    reg.define::<NoArgs>("perf.measure", "How fast devd's own work is, against its budgets")
+    .description("Measures the parts of devd a person feels and that live in this process: opening and migrating the state database, writing conversations, listing them, appending the event log, and reading a conversation back. Each reading has a budget, and a budget is a regression line set several times above what the work costs on an ordinary machine, not a target. A miss is a change worth explaining.")
+    .group("devd")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, _| simple("perf.measure", "measure devd's own work"),
+        |_ctx, _| {
+            let measured = crate::perf::measure(_ctx.paths.root())?;
+            let said = if measured["ok"].as_bool().unwrap_or(false) {
+                "Every reading is inside its budget"
+            } else {
+                "A reading is over its budget"
+            };
+            Ok(Outcome::with_data(said, measured))
+        },
+    )?;
+
     reg.define::<EnvSet>("environment.set", "Switch between local and production")
     .description("Marks this machine as `production` or `local`. Production adds safeguards for agents; switching either way needs approval and a person.")
     .tier(Tier::Admin)
@@ -1945,9 +2046,23 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
                     max_turns: a.max_turns,
                     effort: a.effort.clone(),
                 })?;
-                // The run answers into the conversation that asked for it.
+                // The run answers into the conversation that asked for it, and that conversation
+                // takes the run's name. Its title was generated when it was made — "A team run
+                // (id 6548ec1b-…) is already running" — which is a database key wearing a
+                // sentence: the breadcrumb, the list and the header must not each name the same
+                // conversation differently. A title a person chose is left alone.
                 if let Some(thread) = a.thread.as_deref().filter(|t| !t.is_empty()) {
                     let _ = ctx.store.set_run_thread(&run.id, thread);
+                    let generated = ctx
+                        .store
+                        .get_thread(thread)?
+                        .is_some_and(|t| t.title.starts_with("A team run ("));
+                    if generated {
+                        let name: String = a.goal.trim().chars().take(80).collect();
+                        if !name.is_empty() {
+                            let _ = ctx.store.update_thread(thread, Some(&name), None, None);
+                        }
+                    }
                 }
                 let data = devd_core::deeplink::with_link(serde_json::to_value(&run)?, devd_core::deeplink::run(&run.id));
                 Ok(Outcome::with_data("The planner is working; the team starts as soon as the plan is ready", data))
@@ -4404,6 +4519,24 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             Ok(Outcome::with_data("the interface contract", manifest))
         },
     )?;
+    reg.define::<SuggestModeArgs>("chat.suggest_mode", "Would this message be a run or an answer?")
+    .description("Asks how a message would be handled before it is sent: `kind` is what devd would do with it right now (answer or plan), and `suggest_team` is whether the words are the shape of a project - a whole app, site, service - which is the one case where a person should be offered a team run instead of silently getting a single agent. It starts nothing and spends nothing; a wrong guess here would spend a person's money on branches they did not ask for.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .agent_safe()
+    .dry_run()
+    .idempotent()
+    .handlers(
+        |_, a| simple("chat.suggest_mode", format!("suggest a mode for {} chars", a.text.chars().count())),
+        |_, a| {
+            let kind = devd_core::classify(&a.text, None);
+            let suggest_team = kind == devd_core::RunKind::Answer && devd_core::suggests_team(&a.text);
+            Ok(Outcome::with_data(
+                if suggest_team { "a team run would suit this" } else { "this reads as a conversation" },
+                json!({ "kind": kind.as_str(), "suggest_team": suggest_team }),
+            ))
+        },
+    )?;
     reg.define::<NoArgs>("chat.list", "List conversations")
     .description("Recent conversations with the built-in agent, with their state (idle, running, waiting_approval, error) and token use.")
     .tier(Tier::Read)
@@ -4517,7 +4650,161 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             Ok(Outcome::with_data("the step's output", found.data))
         },
     )?;
-        reg.define::<ThreadArgs>("chat.stop", "Stop the agent")
+        reg.define::<TeamLogArgs>("chat.team_log", "One conversation's team, as a group chat")
+        .description("The messages of everyone working on a run, in one list, each tagged with the role that said it: the planner, the specialists and the person, interleaved by when they happened. Read it instead of opening each specialist's conversation to see what the team is doing. A conversation that is not part of a team run returns its own log.")
+        .tier(Tier::Read)
+        .effect(Effect::Read)
+        .agent_safe()
+        .dry_run()
+        .idempotent()
+        .handlers(
+            |_, a| simple("chat.team_log", format!("read the team of {}", a.thread)),
+            |ctx, a| {
+                ctx.store
+                    .get_thread(&a.thread)?
+                    .ok_or_else(|| DevdError::not_found("no such conversation"))?;
+                let per = a.limit.unwrap_or(200).clamp(1, 500);
+                let Some(run_id) = ctx.store.run_of_thread(&a.thread)? else {
+                    let events = ctx.store.list_events(&a.thread, 0, per)?;
+                    let events: Vec<Value> = events
+                        .iter()
+                        .map(|e| {
+                            let mut v = serde_json::to_value(e).unwrap_or(Value::Null);
+                            v["role"] = Value::Null;
+                            v["origin"] = json!(true);
+                            v
+                        })
+                        .collect();
+                    return Ok(Outcome::with_data(
+                        "This conversation is not part of a team run",
+                        json!({ "run": Value::Null, "origin": a.thread, "roles": {}, "events": events }),
+                    ));
+                };
+                // The conversation the run was started from, or nothing when it was started by a
+                // command with no conversation (a schedule, `devd call team.start`). Pretending the
+                // thread being asked is the origin made every specialist look like the room: its
+                // title became the run's goal and its transcript everybody's messages.
+                let origin = ctx.store.run_thread(&run_id)?;
+                let threads = ctx.store.threads_of_run(&run_id)?;
+                let mut roles = serde_json::Map::new();
+                let mut events: Vec<Value> = Vec::new();
+                for thread in &threads {
+                    let role = ctx.store.role_of_thread(thread)?;
+                    if let Some(role) = &role {
+                        roles.insert(thread.clone(), json!(role));
+                    }
+                    // The newest of each conversation: a room opens on what is happening, not on
+                    // the first thing ever said in it.
+                    for e in ctx.store.tail_events(thread, per)? {
+                        let mut v = serde_json::to_value(&e).unwrap_or(Value::Null);
+                        v["role"] = json!(role);
+                        v["origin"] = json!(origin.as_deref() == Some(thread.as_str()));
+                        events.push(v);
+                    }
+                }
+                // The order they happened in; two threads that wrote at the same instant keep
+                // their own order by sequence number.
+                events.sort_by(|left, right| {
+                    left["created_at"]
+                        .as_str()
+                        .cmp(&right["created_at"].as_str())
+                        .then_with(|| left["id"].as_i64().cmp(&right["id"].as_i64()))
+                });
+                Ok(Outcome::with_data(
+                    format!(
+                        "{} messages across {} conversations",
+                        events.len(),
+                        threads.len()
+                    ),
+                    json!({
+                        "run": run_id,
+                        "origin": origin,
+                        "roles": roles,
+                        "threads": threads,
+                        "events": events,
+                    }),
+                ))
+            },
+        )?;
+    let room = hub.clone();
+    reg.define::<TalkArgs>("chat.talk", "Say something to the room")
+        .description("Posts a message into the conversation a run belongs to, the way a group chat works. Any conversation of the run can be used. `to` addresses a role (`@reviewer`), `about` names the task the message is about, and both are kept with the message so the room can show what it was in reply to. Use it to ask a teammate a question, comment on what someone did, or tell the person what you are doing; it never starts a turn by itself.")
+        .tier(Tier::Write)
+        .effect(Effect::Write)
+        .dry_run()
+        .handlers(
+            |_, a| simple("chat.talk", format!("say something in the room of {}", a.thread)),
+            move |ctx, a| {
+                ctx.store
+                    .get_thread(&a.thread)?
+                    .ok_or_else(|| DevdError::not_found("no such conversation"))?;
+                let Some(run_id) = ctx.store.run_of_thread(&a.thread)? else {
+                    return Err(DevdError::invalid(
+                        "this conversation is not part of a team run; use chat.send to speak to it",
+                    ));
+                };
+                let origin = ctx
+                    .store
+                    .run_thread(&run_id)?
+                    .unwrap_or_else(|| a.thread.clone());
+                // Who is speaking: the role of the conversation the call came from, or devd itself
+                // when the call came from the conversation that started the run.
+                let from = ctx
+                    .store
+                    .role_of_thread(&a.thread)?
+                    .unwrap_or_else(|| "devd".to_string());
+                // A message addressed to a role must name one this run has, or it is addressed to
+                // nobody and should not pretend otherwise.
+                if let Some(to) = a.to.as_deref() {
+                    let known: Vec<String> = ctx
+                        .store
+                        .list_tasks_of_run(&run_id)?
+                        .into_iter()
+                        .map(|t| t.role)
+                        .collect();
+                    if !known.iter().any(|role| role == to) {
+                        return Err(DevdError::invalid(format!(
+                            "this run has no `{to}`; it has {}",
+                            known.join(", ")
+                        )));
+                    }
+                }
+                room.log(
+                    &origin,
+                    "agent",
+                    json!({
+                        "from": from,
+                        "to": a.to,
+                        "about": a.about,
+                        "text": a.text,
+                    }),
+                )?;
+                // An addressed message is delivered, not only displayed: it goes into the queue of
+                // the conversation of the role it names, so that agent reads it at its next step
+                // (or when the host next starts it) and can answer in the room. A message to nobody
+                // in particular is just speech, and wakes no one.
+                if let Some(to) = a.to.as_deref() {
+                    let target = ctx
+                        .store
+                        .list_tasks_of_run(&run_id)?
+                        .into_iter()
+                        .find(|t| t.role == to)
+                        .and_then(|t| t.thread_id);
+                    if let Some(thread) = target {
+                        let said = format!("@{from} said, about {}: {}", a.about.as_deref().unwrap_or("the run"), a.text);
+                        ctx.store.queue_message(&thread, &said, &format!("agent:{from}"))?;
+                    }
+                }
+                Ok(Outcome::with_data(
+                    match a.to.as_deref() {
+                        Some(to) => format!("Posted to the room, addressed to {to}"),
+                        None => "Posted to the room".to_string(),
+                    },
+                    json!({ "run": run_id, "origin": origin, "from": from }),
+                ))
+            },
+        )?;
+    reg.define::<ThreadArgs>("chat.stop", "Stop the agent")
     .description("Stops the agent after its current step and declines anything it was waiting to have approved.")
     .tier(Tier::Exec)
     .effect(Effect::Process)
@@ -4591,6 +4878,39 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
                 Ok(Outcome::ok("Linked this conversation to the pull request"))
             },
         )?;
+    reg.define::<SnoozeThread>("chat.snooze", "Put a conversation aside until later")
+        .description("Takes a conversation out of the working list until an instant, and puts it back by itself when the time passes. A snoozed conversation is not settled: settling says the work is finished, snoozing says it can wait for a better hour. `until` is an RFC 3339 instant; leave it out to bring the conversation back now. Speaking to a snoozed conversation wakes it.")
+        .tier(Tier::Write)
+        .effect(Effect::Write)
+        .human_only()
+        .dry_run()
+        .handlers(
+            |_, a| simple("chat.snooze", format!("snooze conversation {}", a.thread)),
+            |ctx, a| {
+                ctx.store
+                    .get_thread(&a.thread)?
+                    .ok_or_else(|| DevdError::not_found("no such conversation"))?;
+                let until = match a.until.as_deref() {
+                    None => None,
+                    Some(text) => {
+                        let at = chrono::DateTime::parse_from_rfc3339(text).map_err(|_| {
+                            DevdError::invalid(format!("`{text}` is not an instant devd can read"))
+                        })?;
+                        if at <= chrono::Utc::now() {
+                            return Err(DevdError::invalid(
+                                "that time has already passed: wake it, or choose a later time",
+                            ));
+                        }
+                        Some(at.to_rfc3339())
+                    }
+                };
+                ctx.store.set_thread_snooze(&a.thread, until.as_deref())?;
+                Ok(Outcome::ok(match &until {
+                    Some(at) => format!("Put aside until {at}"),
+                    None => "Back in the working list".to_string(),
+                }))
+            },
+        )?;
     reg.define::<SettleThread>("chat.settle", "Settle or reopen a conversation")
         .description("Marks a conversation settled so it leaves the working list, or reopens it. The log is kept either way.")
         .tier(Tier::Write)
@@ -4605,6 +4925,161 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
                 let settled = a.settled.unwrap_or(true);
                 ctx.store.set_thread_settled(&a.thread, settled)?;
                 Ok(Outcome::ok(if settled { "settled" } else { "reopened" }))
+            },
+        )?;
+    reg.define::<ChatWorktree>("chat.worktree", "Give a conversation its own worktree, or put it back on the project")
+        .description("A conversation can work in its own git worktree of its project: a real branch and its own folder, in the same repository, so its changes cannot collide with another piece of work. `create` makes one (branch `devd/<conversation>`, folder `.devd/worktrees/<conversation>-chat`), `attach` points the conversation at a folder that already exists, and `detach` puts it back on the project without deleting anything. A person's decision: the window offers it, and an agent cannot move its own workspace.")
+        .tier(Tier::Write)
+        .effect(Effect::Write)
+        .dry_run()
+        .handlers(
+            |_, a| simple("chat.worktree", format!("{} a worktree for conversation {}", a.action, a.thread)),
+            |ctx, a| {
+                let t = ctx.store
+                    .get_thread(&a.thread)?
+                    .ok_or_else(|| DevdError::not_found("no such conversation"))?;
+                // Back to the project: the worktree and its branch stay on disk, so nothing is lost.
+                if a.action == "detach" {
+                    ctx.store.set_thread_workdir(&a.thread, None)?;
+                    ctx.events.emit_with(
+                        "chat.event",
+                        format!("conversation {} back on the project", a.thread),
+                        json!({ "thread": a.thread, "kind": "worktree" }),
+                    );
+                    return Ok(Outcome::with_data(
+                        "This conversation works in the project's own folder again",
+                        json!({ "thread": a.thread, "workdir": Value::Null, "branch": Value::Null }),
+                    ));
+                }
+                if !matches!(a.action.as_str(), "create" | "attach") {
+                    return Err(DevdError::invalid(format!(
+                        "`{}` is not one of create, attach or detach",
+                        a.action
+                    )));
+                }
+                let project = t.project.as_deref().ok_or_else(|| {
+                    DevdError::invalid(
+                        "this conversation has no project, so there is no repository to take a worktree of",
+                    )
+                })?;
+                let (dir, branch) = if a.action == "create" {
+                    let short = &t.id[..t.id.len().min(8)];
+                    let (dir, branch) =
+                        crate::worktree::create(std::path::Path::new(project), short)?;
+                    (dir.display().to_string(), Some(branch))
+                } else {
+                    let path = a
+                        .path
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|p| !p.is_empty())
+                        .ok_or_else(|| DevdError::invalid("attach needs the folder's path"))?;
+                    let dir = std::path::PathBuf::from(path);
+                    if !dir.is_dir() {
+                        return Err(DevdError::not_found(format!("{path} is not a folder")));
+                    }
+                    if !crate::worktree::is_worktree(&dir) {
+                        return Err(DevdError::invalid(format!(
+                            "{path} is not a git checkout, so a conversation cannot work in it"
+                        )));
+                    }
+                    (dir.display().to_string(), crate::worktree::branch_of(&dir))
+                };
+                ctx.store.set_thread_workdir(&a.thread, Some(&dir))?;
+                ctx.events.emit_with(
+                    "chat.event",
+                    format!("conversation {} in a worktree", a.thread),
+                    json!({ "thread": a.thread, "kind": "worktree", "workdir": dir }),
+                );
+                Ok(Outcome::with_data(
+                    format!("This conversation works in {dir}"),
+                    json!({ "thread": a.thread, "workdir": dir, "branch": branch }),
+                ))
+            },
+        )?;
+    reg.define::<ShipChangesArgs>("chat.changes", "What this conversation has changed")
+        .description("What the conversation's working tree has changed, and where its branch stands: one entry per path with git's status, whether it is staged, and how many commits are ahead of or behind the published branch. Read it before committing, and to tell a person what a conversation produced. Read only.")
+        .tier(Tier::Read)
+        .effect(Effect::Read)
+        .agent_safe()
+        .dry_run()
+        .idempotent()
+        .handlers(
+            |_, a| simple("chat.changes", format!("what conversation {} changed", a.thread)),
+            |ctx, a| {
+                let t = ctx.store
+                    .get_thread(&a.thread)?
+                    .ok_or_else(|| DevdError::not_found("no such conversation"))?;
+                let dir = t
+                    .workdir
+                    .clone()
+                    .filter(|d| std::path::Path::new(d).is_dir())
+                    .or_else(|| t.project.clone())
+                    .ok_or_else(|| {
+                        DevdError::invalid(
+                            "this conversation has no project, so there is nothing for it to have changed",
+                        )
+                    })?;
+                let s = crate::ship::changes(std::path::Path::new(&dir))?;
+                let files: Vec<Value> = s
+                    .files
+                    .iter()
+                    .map(|f| {
+                        json!({
+                            "path": f.path,
+                            "state": format!("{}{}", f.index, f.work).trim().to_string(),
+                            "words": f.words(),
+                            "staged": f.staged(),
+                        })
+                    })
+                    .collect();
+                Ok(Outcome::with_data(
+                    s.line(),
+                    json!({
+                        "thread": a.thread,
+                        "workdir": dir,
+                        "branch": s.branch,
+                        "upstream": s.upstream,
+                        "ahead": s.ahead,
+                        "behind": s.behind,
+                        "clean": s.clean(),
+                        "files": files,
+                    }),
+                ))
+            },
+        )?;
+    reg.define::<ShipArgs>("chat.pr", "Open a pull request for this conversation")
+        .description("Opens the pull request a conversation's branch becomes, through the GitHub CLI, and links it to the conversation. The branch must already be pushed: a review is of commits the host can see. Without a title the host fills the title and body from the commits themselves. Remote, so a person approves it.")
+        .tier(Tier::Remote)
+        .effect(Effect::Remote)
+        .agent_safe()
+        .dry_run()
+        .handlers(
+            |_, a| simple("chat.pr", format!("open a pull request for conversation {}", a.thread)),
+            |ctx, a| {
+                let t = ctx.store
+                    .get_thread(&a.thread)?
+                    .ok_or_else(|| DevdError::not_found("no such conversation"))?;
+                let dir = t
+                    .workdir
+                    .clone()
+                    .filter(|d| std::path::Path::new(d).is_dir())
+                    .or_else(|| t.project.clone())
+                    .ok_or_else(|| {
+                        DevdError::invalid("this conversation has no project, so it has no branch to review")
+                    })?;
+                let title = a.title.as_deref().map(str::trim).filter(|t| !t.is_empty());
+                let url = crate::ship::open_pr(std::path::Path::new(&dir), title, a.body.as_deref())?;
+                ctx.store.set_thread_pr(&a.thread, Some(&url))?;
+                ctx.events.emit_with(
+                    "chat.event",
+                    format!("conversation {} opened a pull request", a.thread),
+                    json!({ "thread": a.thread, "kind": "pr", "url": url }),
+                );
+                Ok(Outcome::with_data(
+                    format!("Opened {url}"),
+                    json!({ "thread": a.thread, "url": url }),
+                ))
             },
         )?;
     {
@@ -4694,10 +5169,32 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
                 Ok(Plan::new("chat.delete", format!("delete the conversation \"{}\" and its log", t.title)).destructive(true))
             },
             move |ctx, a| {
-                ctx.store.get_thread(&a.thread)?.ok_or_else(|| DevdError::not_found("no such conversation"))?;
+                let t = ctx.store.get_thread(&a.thread)?.ok_or_else(|| DevdError::not_found("no such conversation"))?;
                 hub.stop(ctx, &a.thread)?;
+                // A worktree with nothing left in it goes with the conversation. One that still
+                // holds work stays, and the answer says where: deleting a conversation is not a way
+                // to throw a change away by accident.
+                let ended = end_worktree(&t);
                 ctx.store.delete_thread(&a.thread)?;
-                Ok(Outcome::with_data("Deleted the conversation", json!({ "deleted": 1 })))
+                let wording = match &ended {
+                    Some((_, crate::worktree::End::Kept(why))) => {
+                        format!("Deleted the conversation. Its worktree was kept because {why}.")
+                    }
+                    Some((_, crate::worktree::End::Removed)) => {
+                        "Deleted the conversation, and the empty worktree it had.".to_string()
+                    }
+                    None => "Deleted the conversation".to_string(),
+                };
+                let worktree = ended.map(|(path, end)| match end {
+                    crate::worktree::End::Removed => json!({ "path": path, "kept": false }),
+                    crate::worktree::End::Kept(why) => {
+                        json!({ "path": path, "kept": true, "reason": why })
+                    }
+                });
+                Ok(Outcome::with_data(
+                    wording,
+                    json!({ "deleted": 1, "worktree": worktree }),
+                ))
             },
         )?;
     }
@@ -4716,11 +5213,20 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
             },
             move |ctx, a| {
                 let threads = ctx.store.finished_threads_before(&prune_cutoff(a.days))?;
+                let mut kept = 0;
                 for t in &threads {
                     hub.stop(ctx, &t.id)?;
+                    if matches!(end_worktree(t), Some((_, crate::worktree::End::Kept(_)))) {
+                        kept += 1;
+                    }
                     ctx.store.delete_thread(&t.id)?;
                 }
-                Ok(Outcome::with_data(format!("Deleted {} conversation(s)", threads.len()), json!({ "deleted": threads.len() })))
+                let said = if kept > 0 {
+                    format!("Deleted {} conversation(s). {kept} worktree(s) were kept because they still hold unmerged or uncommitted work.", threads.len())
+                } else {
+                    format!("Deleted {} conversation(s)", threads.len())
+                };
+                Ok(Outcome::with_data(said, json!({ "deleted": threads.len(), "worktrees_kept": kept })))
             },
         )?;
     }

@@ -62,7 +62,14 @@ tasks:
 detect:
   min_score: 2
   rules:
+    # A package.json is the manifest: it is what makes a project a Node project, and on its own it
+    # is conclusive. It used to be the only rule and worth 2, which the scale reads as "low
+    # confidence" and reports as "only weak evidence for Node.js" — a warning about a project that
+    # is not ambiguous at all, sent to the planner of both real projects built with devd.
     - {file: package.json, weight: 2, evidence: package.json}
+    - {text: "\"scripts\"", in_file: package.json, weight: 1, evidence: "package.json declares scripts"}
+    - {text: "node ", in_file: package.json, weight: 3, evidence: "a script or an engine names node"}
+    - {text: "\"type\": \"module\"", in_file: package.json, weight: 1, evidence: "package.json sets the module system"}
 structure: [package.json, index.js]
 conventions:
   - "Scripts in package.json are the entry points; prefer them to ad hoc commands."

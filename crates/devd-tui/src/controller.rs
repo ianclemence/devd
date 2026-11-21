@@ -470,7 +470,7 @@ impl Controller {
                 // approve. Rebuilding it later would be a way for what runs to
                 // differ from what was read.
                 let plan = self.backend.plan(&request).ok().flatten();
-                self.state.overlay = Overlay::Approval(Pending {
+                self.state.overlay = Overlay::approval(Pending {
                     id: id.to_string(),
                     plan,
                     request,
@@ -1034,7 +1034,7 @@ impl Controller {
         // Review the exact commands with the same overlay approvals use.
         let req = InvokeRequest { id: "project.init".into(), args: request, dry_run: false };
         let plan = self.backend.plan(&req).ok().flatten();
-        self.state.overlay = Overlay::Approval(Pending { id: "project.init".into(), plan, request: req });
+        self.state.overlay = Overlay::approval(Pending { id: "project.init".into(), plan, request: req });
     }
 
     // ---- toolchain and projects -----------------------------------------
@@ -1258,7 +1258,7 @@ impl Controller {
         plan = plan
             .destructive(true)
             .effect("git refuses a switch that would overwrite these files");
-        self.state.overlay = Overlay::Approval(Pending {
+        self.state.overlay = Overlay::approval(Pending {
             id: "git.switch".to_string(),
             plan: Some(plan),
             request,

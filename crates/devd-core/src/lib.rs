@@ -73,9 +73,10 @@ pub use events::{Event, EventBus};
 pub use paths::Paths;
 pub use registry::{DispatchOptions, Registry};
 pub use runs::{
-    classify, evaluate, evidence_for, evidence_for_effect, ApprovalRecord, ArtifactRecord,
-    CompletionPolicy, CompletionVerdict, Evidence, EvidenceDraft, EvidenceKind, Run, RunContext,
-    RunEvent, RunKind, RunMode, RunState, RunStep, ToolCall, OBSERVED_CAPABILITY, VERIFY_TASKS,
+    classify, evaluate, evidence_for, evidence_for_effect, suggests_team, ApprovalRecord,
+    ArtifactRecord, CompletionPolicy, CompletionVerdict, Evidence, EvidenceDraft, EvidenceKind,
+    Run, RunContext, RunEvent, RunKind, RunMode, RunState, RunStep, ToolCall, OBSERVED_CAPABILITY,
+    VERIFY_TASKS,
 };
 pub use state::Store;
 pub use store_ai::{

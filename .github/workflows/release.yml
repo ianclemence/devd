@@ -28,8 +28,24 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # The tests gate the release, not only the build. A release that ships while the suite is red is
+  # a release nobody checked: 0.38.0 to 0.39.4 shipped with devd-desktop/tauri.conf.json still
+  # saying 0.38.0, which crates/devd-cli/tests/version.rs exists to catch and would have caught â€”
+  # the release workflow had no test step, and ci.yml does not run on feature branches.
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Test the workspace
+        run: cargo test --workspace --exclude devd-desktop --exclude devd-app --no-fail-fast
+
   windows:
     name: windows
+    needs: [test]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -91,6 +107,7 @@ jobs:
 
   macos:
     name: macos (${{ matrix.arch }})
+    needs: [test]
     runs-on: macos-latest
     strategy:
       fail-fast: false
@@ -142,6 +159,7 @@ jobs:
 
   linux:
     name: linux
+    needs: [test]
     # The oldest runner still supported: a program built against an older C library runs on newer ones.
     runs-on: ubuntu-22.04
     steps:

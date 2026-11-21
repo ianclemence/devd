@@ -34,6 +34,18 @@ use crate::capability::Outcome;
 use crate::error::{DevdError, Result};
 use crate::util;
 
+/// The words a paused run carries when its budget is what stopped it.
+///
+/// The scheduler writes it once and the needs object and the window read it, so
+/// "this run stopped at its budget" is one fact rather than three guesses at a
+/// sentence. A run paused for any other reason must not be mistaken for one.
+pub const BUDGET_REACHED: &str = "Budget reached";
+
+/// Whether a run's own reason says its budget is what stopped it.
+pub fn at_budget(reason: &str) -> bool {
+    reason.starts_with(BUDGET_REACHED)
+}
+
 /// How a run is being driven.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -141,6 +153,38 @@ impl RunKind {
     pub fn all() -> [Self; 4] {
         [Self::Answer, Self::Plan, Self::Assign, Self::Schedule]
     }
+}
+
+/// Whether a message is the shape of a project rather than a question.
+///
+/// This starts nothing. It is the evidence for *offering* a run: "Build a hello-world Wikipedia
+/// clone" is a project, and it used to fall into a conversation with no plan, no worktree and no
+/// verdict - one real one reached 7.25 million input tokens in a single context and never
+/// compiled. A question ("why does cargo link with rust-lld on Windows?") stays a conversation.
+///
+/// It is deliberately a question and not a decision, because a wrong guess here spends a person's
+/// money on branches they did not ask for.
+pub fn suggests_team(message: &str) -> bool {
+    let t = message.trim();
+    if t.is_empty() {
+        return false;
+    }
+    // Only the opening counts: "build" later in a sentence is usually describing something.
+    let opening = t.split(['.', '\n']).next().unwrap_or(t).trim().to_ascii_lowercase();
+    const VERBS: &[&str] = &[
+        "build ", "create ", "implement ", "develop ", "make ", "write ", "clone ", "scaffold ",
+        "port ", "rewrite ", "design and build ",
+    ];
+    if !VERBS.iter().any(|v| opening.starts_with(v)) {
+        return false;
+    }
+    let whole = t.to_ascii_lowercase();
+    const THINGS: &[&str] = &[
+        "app", "site", "website", "web app", "api", "service", "server", "clone", "dashboard",
+        "cli", "engine", "pipeline", "system", "platform", "tool", "game", "bot", "scheduler",
+        "tracker", "store", "marketplace", "editor",
+    ];
+    THINGS.iter().any(|thing| whole.contains(thing))
 }
 
 /// What a person's words ask for: the filter in front of every model call.
@@ -655,6 +699,24 @@ impl CompletionPolicy {
     /// require a test run, and a request to fix code does. A person's explicit
     /// criteria always require verification.
     pub fn for_goal(goal: &str, acceptance: &[String]) -> Self {
+        // A review is not the work it reviews. "Review the change against the README" contains
+        // "change", so the classifier read it as a request to change code and demanded a passing
+        // check from a reviewer whose whole proof is that it read the diff and reported a verdict —
+        // the team layer judges that verdict separately. Whichever verb the request opens with
+        // decides: review, audit, inspect and verify ask for a judgement, not an edit.
+        let opening = goal.trim_start().to_ascii_lowercase();
+        let reviewing = ["review", "re-review", "audit", "inspect", "assess", "verify the"]
+            .iter()
+            .any(|verb| opening.starts_with(verb));
+        if reviewing && acceptance.is_empty() {
+            return Self {
+                kind: "review".into(),
+                requires_change: false,
+                requires_verify: false,
+                note: "the request asks for a judgement of work already done, not for a change".into(),
+                acceptance: Vec::new(),
+            };
+        }
         // Words inside code (fences or backticks) are content, not the request: "Build"
         // in a diagram is not an instruction to build. The rest is matched on word starts,
         // so "address" does not read as "add".
@@ -1770,6 +1832,31 @@ mod tests {
         }
     }
 
+    /// The two cases a person actually tried, and the line between them.
+    #[test]
+    fn a_project_is_offered_a_run_and_a_question_is_not() {
+        for project in [
+            "Build a hello world Wikipedia clone site in Next.js",
+            "build \"Kata\": a Rust app that removes photo backgrounds on-device",
+            "Create an API for tracking expenses, with tests",
+            "implement a CLI that syncs notes to a local store",
+        ] {
+            assert!(suggests_team(project), "a project: {project:?}");
+            // ...and none of them start anything by being classified: they are still answered
+            // unless the person accepts the offer.
+            assert_eq!(classify(project, None), RunKind::Answer, "{project:?}");
+        }
+        for question in [
+            "why does cargo link with rust-lld on Windows?",
+            "what is a run in devd, and how is it different from a conversation?",
+            "How do I make my tests faster?",
+            "Explain how the scheduler decides when a task starts.",
+            "the site is slow, where should I look?",
+        ] {
+            assert!(!suggests_team(question), "not a project: {question:?}");
+        }
+    }
+
     #[test]
     fn a_message_that_asks_for_the_team_is_planned_not_answered() {
         for text in ["have the team build a blog", "team: add password reset", "Ask the team to ship it"] {
@@ -1836,6 +1923,26 @@ mod tests {
             "a deliberate retry is allowed"
         );
         assert!(!RunState::Cancelled.can_transition_to(RunState::Executing));
+    }
+
+    /// The reviewer in a real run was asked to "review the change against README and house rules",
+    /// which the classifier read as a request to change code: it demanded a passing check from a
+    /// role whose entire proof is reading the diff and saying what it found.
+    #[test]
+    fn a_review_of_a_change_does_not_demand_a_change_of_its_own() {
+        for goal in [
+            "Review the change against README and house rules",
+            "Re-review the fixes",
+            "Audit the metrics module for correctness",
+            "Inspect the migration and report what you find",
+        ] {
+            let p = CompletionPolicy::for_goal(goal, &[]);
+            assert!(!p.requires_change, "{goal}");
+            assert!(!p.requires_verify, "{goal}");
+        }
+        // The words still count when the person really is asking for the change.
+        let p = CompletionPolicy::for_goal("Change the review page layout", &[]);
+        assert!(p.requires_change && p.requires_verify);
     }
 
     #[test]

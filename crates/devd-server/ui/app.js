@@ -5744,6 +5744,22 @@ var TERM_POLL_MS = 250;
       });
   }
 
+  /* What a person has read in this review, by project and path. Session only: it is a reading aid,
+   * not a record of anything the host should keep. */
+  function gitReadKey(path) {
+    return (state.project && state.project.path ? state.project.path : "") + "|" + path;
+  }
+  function gitRead(path) {
+    state.gitRead = state.gitRead || {};
+    return !!state.gitRead[gitReadKey(path)];
+  }
+  function setGitRead(path, on) {
+    state.gitRead = state.gitRead || {};
+    var key = gitReadKey(path);
+    if (on) state.gitRead[key] = 1;
+    else delete state.gitRead[key];
+  }
+
   function fileRow(kind, change) {
     var path = typeof change === "string" ? change : change.path;
     // Git reports untracked and conflicted files as bare paths. The group the
@@ -5767,8 +5783,10 @@ var TERM_POLL_MS = 250;
       actions.push(mini("Theirs", "resolve-theirs", { path: path }));
     }
     var selected = state.diff && state.diff.path === path ? " selected" : "";
+    var read = gitRead(path);
     return (
-      '<div class="row' + selected + '">' +
+      '<div class="row' + selected + (read ? " is-read" : "") + '">' +
+      '<button type="button" class="read-dot' + (read ? " is-read" : "") + '" data-action="git-read" data-path="' + attr(path) + '" aria-pressed="' + (read ? "true" : "false") + '" title="' + (read ? "Read: press to mark it unread" : "Mark it read") + '" aria-label="' + (read ? "Mark it unread" : "Mark it read") + '"></button>' +
       statusTag(code) +
       '<span class="row-main nowrap" title="' + attr(path) + '">' + esc(path) + "</span>" +
       '<span class="row-actions">' + actions.join("") + "</span>" +
@@ -5778,9 +5796,17 @@ var TERM_POLL_MS = 250;
 
   function fileGroup(label, kind, items) {
     if (!items || !items.length) return "";
+    var paths = items.map(function (c) { return typeof c === "string" ? c : c.path; });
+    var read = paths.filter(gitRead).length;
+    var allRead = read === paths.length;
     return (
       '<div class="file-group">' +
-      '<div class="file-group-head"><span>' + esc(label) + '</span><span class="right">' + items.length + "</span></div>" +
+      '<div class="file-group-head"><span>' + esc(label) + (read ? ' <span class="read-count">' + read + " read</span>" : "") + '</span>' +
+      '<span class="right">' +
+      // Quiet, like the window's: reading is not a change to the repository, and the staging
+      // buttons are what a person came here to press.
+      '<button type="button" class="mark-read" data-action="git-read-all" data-kind="' + attr(kind) + '">' + (allRead ? "Mark all unread" : "Mark all read") + "</button>" +
+      "<span>" + items.length + "</span></span></div>" +
       items.map(function (c) { return fileRow(kind, c); }).join("") +
       "</div>"
     );
@@ -9156,6 +9182,16 @@ var TERM_POLL_MS = 250;
     if (node) node.textContent = "devd: " + clip(text, 300);
   }
 
+  /* What a conversation's working tree has changed, and where its branch stands.
+   * A conversation with no project, or one that is not a repository, has nothing to say, so a
+   * failure is silence rather than a banner over the chat. */
+  function loadChanges(tid) {
+    return read("chat.changes", { thread: tid }).then(
+      function (c) { if (AI.thread && AI.thread.id === tid) AI.changes = c; },
+      function () { if (AI.thread && AI.thread.id === tid) AI.changes = null; }
+    );
+  }
+
   function applyThread(d, full, quiet) {
       if (full) { AI.events = []; AI.lastId = 0; AI.outputs = []; }
       d.events.forEach(function (e) {
@@ -9169,6 +9205,44 @@ var TERM_POLL_MS = 250;
         if (!full && !quiet) announceEvent(e);
       });
       AI.thread = d.thread; AI.pending = d.pending || []; AI.running = d.running; AI.chapters = d.chapters || []; AI.run = d.run || null;
+      // A conversation that belongs to a run is one room: read the whole run's messages, not only
+      // this conversation's, so a specialist's work shows up where the person already is. Read once
+      // when the conversation opens and again when a poll says something new arrived.
+      var mine = (AI.threads || []).filter(function (t) { return t.id === d.thread.id; })[0];
+      var runId = (mine && mine.team && mine.team.run) || null;
+      if (!runId) {
+        AI.room = null;
+        AI.roomFor = null;
+        AI.roomRun = null;
+      } else if (AI.roomFor !== runId || (d.events || []).length) {
+        // Read the room when the conversation opens and again whenever a poll brought something
+        // new; a poll that brought nothing must not pay for the whole run's log.
+        AI.roomFor = runId;
+        // The run itself: its state and who is on it, for the header. One read when the room opens.
+        if (!AI.roomRun || AI.roomRun.run !== runId) {
+          read("team.get", { run: runId }).then(function (g) {
+            var tasks = (g && g.tasks) || [];
+            var roles = tasks.map(function (x) { return roleFace(x.role).name; });
+            roles = roles.filter(function (name, i) { return roles.indexOf(name) === i; });
+            AI.roomRun = { run: runId, state: (g && g.run && g.run.state) || "", roles: roles };
+            if (state.view === "assistant") paintChat(false);
+          }).catch(function () { AI.roomRun = null; });
+        }
+        read("chat.team_log", { thread: d.thread.id, limit: 400 }).then(function (log) {
+          if (!AI.thread || AI.thread.id !== d.thread.id) return;
+          AI.room = (log && log.events) || [];
+          if (state.view === "assistant") paintChat(false);
+        }).catch(function () { AI.room = null; });
+      }
+      // What the conversation's working tree has changed, read when it opens and after an action
+      // that can change it. Not on every poll: git status is cheap, but a chat repaints often.
+      if (AI.changesFor !== d.thread.id) {
+        AI.changesFor = d.thread.id;
+        AI.changes = null;
+        loadChanges(d.thread.id).then(function () {
+          if (state.view === "assistant") paintChat(true);
+        });
+      }
       if (d.thread.provider_id) AI.pickProvider = d.thread.provider_id;
       if (d.thread.model) AI.pickModel = d.thread.model;
       AI.queued = d.queued || 0;
@@ -9906,7 +9980,10 @@ var TERM_POLL_MS = 250;
   function chatHtml() {
     var results = {};
     var resultAt = {};
-    AI.events.forEach(function (e) {
+    // A conversation that belongs to a run is the room for the whole run. Its events come from
+    // chat.team_log (every member's messages, in order), and each carries the role that said it.
+    var events = (AI.room && AI.room.length) ? AI.room : AI.events;
+    events.forEach(function (e) {
       if (e.kind !== "tool_result") return;
       results[e.data.tool_use_id] = e.data;
       resultAt[e.data.tool_use_id] = e.created_at;
@@ -9945,8 +10022,10 @@ var TERM_POLL_MS = 250;
       if (current) current.items.push(html);
       activity = null;
     };
-    var openTurn = function (at, key) {
-      current = { at: at || "", end: at || "", items: [], copy: null, last: "none", key: key || "", lastText: -1, edits: {}, commands: 0, passed: 0, failed: 0 };
+    // A turn belongs to one speaker. In a single agent's conversation that is always the
+    // conversation's own agent; in a room it is whoever wrote the message, so the turn carries it.
+    var openTurn = function (at, key, role) {
+      current = { at: at || "", end: at || "", items: [], copy: null, last: "none", key: key || "", role: role || null, lastText: -1, edits: {}, commands: 0, passed: 0, failed: 0 };
       blocks.push({ type: "turn", turn: current });
     };
     var endTurn = function () {
@@ -9955,7 +10034,7 @@ var TERM_POLL_MS = 250;
       current = null;
     };
 
-    AI.events.forEach(function (e) {
+    events.forEach(function (e) {
       if (e.kind === "user") {
         // A person's message stands on its own. The assistant's reply is the
         // turn that follows it; it does not share the person's row or avatar.
@@ -9963,8 +10042,18 @@ var TERM_POLL_MS = 250;
         blocks.push({ type: "user", at: e.created_at, text: e.data.text || "", from: e.data.from || "", key: e.id });
         return;
       }
+      // A message one teammate addresses to another: it is speech in the room, not a turn and not
+      // the person speaking, so it sits between turns with who said it and what it answers.
+      if (e.kind === "agent") {
+        endTurn();
+        blocks.push({ type: "said", at: e.created_at, from: e.data.from || "", to: e.data.to || "", about: e.data.about || "", text: e.data.text || "", key: e.id });
+        return;
+      }
       if (e.kind === "assistant") {
-        if (!current) openTurn(e.created_at, e.id);
+        // In a room, a change of speaker starts a new turn: two agents' words must not share one
+        // heading, or the room reads as if one member said both.
+        if (current && (e.role || null) !== (current.role || null)) endTurn();
+        if (!current) openTurn(e.created_at, e.id, e.role);
         current.end = (resultAt && e.created_at) || current.end;
         // Each model call's tools are one run: three searches in one call read
         // as "Searched 3 times", while the next call gets its own line. The
@@ -10056,6 +10145,17 @@ var TERM_POLL_MS = 250;
     var face = roleFace(role);
     var specialist = role !== "devd";
     var html = blocks.map(function (block, i) {
+      // A message one teammate addressed to another: a note in the room with who it is for and
+      // what it is about, quiet because it is conversation rather than the work itself.
+      if (block.type === "said") {
+        var whenS = shortTime(block.at);
+        return '<div class="msg msg-said" data-key="a' + block.key + '"><div class="said">' + faceHtml(block.from, "sm") +
+          '<div class="grow"><div class="said-head"><b>' + esc(roleFace(block.from).name) + "</b>" +
+          (block.to ? '<span class="said-to">@' + esc(roleFace(block.to).name) + "</span>" : "") +
+          (block.about ? '<span class="dim">' + esc(block.about) + "</span>" : "") +
+          (whenS ? '<span class="dim">' + esc(whenS) + "</span>" : "") +
+          '</div><div class="bubble">' + md(block.text) + "</div></div></div></div>";
+      }
       // Every message names who sent it ("human:…" for the person); only the team's own
       // messages are drawn as the team's.
       if (block.type === "user" && block.from === "devd-team") {
@@ -10127,7 +10227,7 @@ var TERM_POLL_MS = 250;
       var tail = active ? '<div class="msg-tail" id="chat-tail" data-morph="skip" hidden></div>' : "";
       var whenA = shortTime(turn.at);
       return '<div class="turn msg-agent" data-key="t' + (turn.key || "live") + '">' +
-        '<div class="turn-who">' + faceHtml(role) + '<b>' + esc(face.name) + "</b>" + (whenA ? '<span class="dim">' + esc(whenA) + "</span>" : "") + "</div>" +
+        '<div class="turn-who">' + faceHtml(turn.role || role) + '<b>' + esc(roleFace(turn.role || role).name) + "</b>" + (whenA ? '<span class="dim">' + esc(whenA) + "</span>" : "") + "</div>" +
         '<div class="turn-body">' + body + typing + tail +
         (turn.copy && !active ? msgActions(turn.copy, 0) : "") +
         "</div></div>";
@@ -11004,6 +11104,12 @@ var TERM_POLL_MS = 250;
       if (runTitle && runTitle !== shownTitle) sub.push(runTitle);
     }
     if (word) sub.push(word);
+    // A room names everyone in it and where the work stands, so the header answers "who is involved"
+    // before the transcript is read. It is the same roster the bubbles come from.
+    if (team && team.run && AI.roomRun && AI.roomRun.run === team.run) {
+      if (AI.roomRun.state) sub.push(AI.roomRun.state);
+      if (AI.roomRun.roles && AI.roomRun.roles.length) sub.push(AI.roomRun.roles.join(", "));
+    }
     if (t.resume_at) sub.push("paused by a usage limit, resumes " + (Date.parse(t.resume_at) > Date.now() ? "at " + new Date(t.resume_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "now"));
     if (used) sub.push(compactCount(used) + " tokens");
     // The head is a quiet line: who this is, what it is for and where it stands. The
@@ -11013,13 +11119,20 @@ var TERM_POLL_MS = 250;
       '<div class="chat-title">' + esc(shownTitle) + "</div>" +
       '<div class="chat-head-sub">' + esc(sub.join(" · ")) + "</div></div>" +
       (AI.queued > 0 ? '<span class="chip chip-warn" title="Messages waiting for the next step">' + AI.queued + " queued</span>" : "") +
+      // The branch this conversation works on, when it owns a worktree of the project: the same
+      // quiet fact the window shows, with what is waiting to go out.
+      (AI.changes && AI.changes.branch && AI.changes.thread === t.id ? '<span class="chip" title="' + attr(AI.changes.branch + (AI.changes.ahead ? " · " + AI.changes.ahead + " to push" : "") + (AI.changes.behind ? " · " + AI.changes.behind + " to pull" : "")) + '"><svg class="icon" aria-hidden="true"><use href="#i-branch"></use></svg>' + esc(AI.changes.branch) + "</span>" : "") +
       (t.pr_url ? '<button type="button" class="chip chip-pr" data-action="open-url" data-url="' + attr(t.pr_url) + '" title="' + attr(t.pr_url) + '"><svg class="icon" aria-hidden="true"><use href="#i-branch"></use></svg>' + esc(prLabel(t.pr_url)) + "</button>" : "") +
       (t.settled_at ? '<span class="chip chip-ok" title="Settled ' + attr(ago(t.settled_at)) + '">Settled</span>' : "") +
+      (snoozedNow(t) ? '<span class="chip" title="Back in the list by itself">Snoozed until ' + esc(snoozedClock(t)) + "</span>" : "") +
       // Context links sit together, before the actions: where this conversation
       // came from, the run behind it, and the chapters inside it.
       (team && team.parent ? '<button type="button" class="btn btn-mini btn-ghost" data-action="open-thread" data-id="' + attr(team.parent) + '" title="The conversation that asked for this work">Back to request</button>' : "") +
       (team ? '<button type="button" class="btn btn-mini btn-ghost" data-action="team-open-from" data-id="' + attr(team.run) + '">See the run</button>' : "") +
       (AI.chapters && AI.chapters.length ? '<button type="button" class="btn btn-mini btn-ghost" data-action="chapters-open">Chapters ' + AI.chapters.length + "</button>" : "") +
+      // Reviewing what the conversation changed is the first action, because it is the one a
+      // person comes back to the conversation to do.
+      ((t.workdir || t.project) ? '<button type="button" class="btn btn-mini btn-ghost" data-action="thread-changes" title="' + attr(AI.changes && AI.changes.clean === false ? "There are uncommitted changes: review them, then commit and push" : "Review the changes, then commit and push") + '">Changes' + (AI.changes && AI.changes.clean === false ? '<span class="dot dot-warn" aria-hidden="true"></span>' : "") + "</button>" : "") +
       // Actions, in the order they are used: find, inspect, act, then the menu.
       '<button type="button" class="btn btn-mini btn-ghost btn-icon" data-action="thread-find" title="Search this conversation (Ctrl F)" aria-label="Search this conversation"><svg class="icon" aria-hidden="true"><use href="#i-search"></use></svg></button>' +
       (r ? '<button type="button" class="btn btn-mini btn-ghost" data-action="open-run" data-id="' + attr(r.id) + '" title="Steps, capability calls, evidence and the durable timeline">Evidence</button>' : "") +
@@ -11035,9 +11148,17 @@ var TERM_POLL_MS = 250;
       '<button type="button" role="menuitemcheckbox" class="more-item" data-action="work-terminal" aria-checked="' + (AI.work.terminal.open ? "true" : "false") + '"><span>Terminal</span><span class="more-hint">' + (AI.work.terminal.open ? "Open — choose to close" : "A shell in the project") + "</span></button>" +
       '<div class="more-sep"></div>' +
       (!team ? '<button type="button" role="menuitem" class="more-item" data-action="thread-rename"><span>Rename</span></button>' : "") +
+      // Where the work happens, and how it leaves: a worktree of its own, the changes, the review.
+      ((t.workdir || t.project) ? '<button type="button" role="menuitem" class="more-item" data-action="thread-changes"><span>Review the changes</span><span class="more-hint">' + esc(AI.changes && AI.changes.clean === false ? (AI.changes.files || []).length + " file(s), then commit and push" : "The project's Git screen, on this conversation's folder") + "</span></button>" : "") +
+      ((t.project && !team) ? '<button type="button" role="menuitem" class="more-item" data-action="thread-worktree" data-on="' + (t.workdir ? "1" : "0") + '"><span>' + (t.workdir ? "Work on the project again" : "Give it a worktree") + '</span><span class="more-hint">' + (t.workdir ? "Its folder and branch are kept" : "Its own branch and folder, so changes cannot collide") + "</span></button>" : "") +
+      ((t.workdir && !t.pr_url) ? '<button type="button" role="menuitem" class="more-item" data-action="thread-open-pr"><span>Open a pull request</span><span class="more-hint">Pushed branch only; the host fills the title from the commits</span></button>' : "") +
       '<button type="button" role="menuitem" class="more-item" data-action="thread-link-pr"><span>' + (t.pr_url ? "Change the pull request" : "Link a pull request") + '</span><span class="more-hint">Shown on the conversation and in the list</span></button>' +
       (t.pr_url ? '<button type="button" role="menuitem" class="more-item" data-action="thread-unlink-pr"><span>Unlink the pull request</span></button>' : "") +
       '<button type="button" role="menuitem" class="more-item" data-action="thread-settle" data-settled="' + (t.settled_at ? "0" : "1") + '"><span>' + (t.settled_at ? "Reopen" : "Mark as settled") + '</span><span class="more-hint">' + (t.settled_at ? "Back among the open work" : "Done: it stays, quieter, in the list") + "</span></button>" +
+      (snoozedNow(t)
+        ? '<button type="button" role="menuitem" class="more-item" data-action="thread-snooze" data-until="now"><span>Wake it now</span><span class="more-hint">Back in the list</span></button>'
+        : '<button type="button" role="menuitem" class="more-item" data-action="thread-snooze" data-hours="1"><span>Snooze for an hour</span><span class="more-hint">Out of the way for a while</span></button>' +
+          '<button type="button" role="menuitem" class="more-item" data-action="thread-snooze" data-until="tomorrow"><span>Snooze until tomorrow</span><span class="more-hint">09:00, in your own time</span></button>') +
       '<div class="more-sep"></div>' +
       '<button type="button" role="menuitem" class="more-item btn-danger" data-action="chat-delete" data-id="' + attr(t.id) + '"><span>Delete</span></button>' +
       "</div></div>";
@@ -11062,6 +11183,15 @@ var TERM_POLL_MS = 250;
     var p = (state.projects || []).filter(function (x) { return x.path === path; })[0];
     return (p && p.name) || dirName(path);
   }
+  /* A conversation put aside until a time: still in the list, dimmer, and back by itself when the
+   * hour comes. Settled work is finished; snoozed work is waiting for a better moment. */
+  function snoozedNow(t) {
+    return !!(t && t.snoozed_until) && Date.parse(t.snoozed_until) > Date.now();
+  }
+  function snoozedClock(t) {
+    return new Date(t.snoozed_until).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+
   function threadState(t) {
     var s = t.state === "running" ? "run" : t.state === "waiting_approval" ? "wait" : t.state === "error" ? "bad" : "";
     if (!s && t.team && (t.team.task_state === "unverified" || t.team.task_state === "failed" || t.team.task_state === "blocked")) s = "bad";
@@ -11075,6 +11205,7 @@ var TERM_POLL_MS = 250;
     else if (running) bits.push('<span class="stand stand-run">Working</span>');
     else if (t.state === "error") bits.push('<span class="stand stand-bad">Stopped</span>');
     else if (t.settled_at) bits.push('<span class="stand stand-ok">Settled</span>');
+    else if (snoozedNow(t)) bits.push('<span class="stand">Snoozed until ' + esc(snoozedClock(t)) + "</span>");
     if (t.pr_url) bits.push('<span class="stand">' + esc(prLabel(t.pr_url).replace(/^.*#/, "PR #")) + "</span>");
     if (t.resume_at) bits.push('<span class="stand">resumes later</span>');
     return bits.join('<span class="stand-sep" aria-hidden="true">\u00b7</span>');
@@ -11156,8 +11287,9 @@ var TERM_POLL_MS = 250;
     return order.map(function (key) {
       var g = groups[key];
       g.items.sort(function (a, b) {
-        // Open work first, then by when it last moved; settled conversations sink.
-        if (!!a.settled_at !== !!b.settled_at) return a.settled_at ? 1 : -1;
+        // Open work first, then what is put aside, then what is settled; each by when it last moved.
+        var rank = function (t) { return t.settled_at ? 2 : snoozedNow(t) ? 1 : 0; };
+        if (rank(a) !== rank(b)) return rank(a) - rank(b);
         return a._at < b._at ? 1 : -1;
       });
       var closed = !!AI.groupClosed[key];
@@ -11524,6 +11656,12 @@ var TERM_POLL_MS = 250;
     return '<div class="run-score" aria-label="Run scorecard">' + items.join("") + "</div>";
   }
 
+  /* The words the scheduler writes when a budget is what stopped a run (devd-core::runs), so this
+   * page and the native window recognise one the same way. */
+  function budgetStopped(r) {
+    return !!(r && r.state === "paused" && String(r.error || "").indexOf("Budget reached") === 0);
+  }
+
   function teamDetail(d) {
     var r = d.run, tasks = d.tasks, events = d.events;
     var planner = tasks.filter(function (t) { return t.role === "planner"; })[0];
@@ -11533,7 +11671,13 @@ var TERM_POLL_MS = 250;
     var primary = "";
     if (r.state === "awaiting_plan") primary = '<button type="button" class="btn btn-mini btn-primary" data-action="team-approve" data-id="' + attr(r.id) + '">Approve plan and start</button>';
     if (r.state === "running") primary = '<button type="button" class="btn btn-mini" data-action="team-pause" data-id="' + attr(r.id) + '">Pause</button>';
-    if (r.state === "paused") primary = '<button type="button" class="btn btn-mini btn-primary" data-action="team-resume" data-id="' + attr(r.id) + '">Resume</button>';
+    if (r.state === "paused") {
+      // A run stopped at its budget cannot be resumed into progress: the scheduler sees the same
+      // usage and pauses it again at the next step. Offer the one action that works.
+      primary = budgetStopped(r)
+        ? '<button type="button" class="btn btn-mini btn-primary" data-action="team-budget" data-id="' + attr(r.id) + '">Raise the budget</button>'
+        : '<button type="button" class="btn btn-mini btn-primary" data-action="team-resume" data-id="' + attr(r.id) + '">Resume</button>';
+    }
     var over0 = ["planning", "awaiting_plan", "running", "paused"].indexOf(r.state) < 0;
     if (!over0) actions += '<button type="button" class="btn btn-mini btn-danger" data-action="team-cancel" data-id="' + attr(r.id) + '">Cancel run</button>';
     // Evidence first, then the run's own control; deleting a finished run is a quiet icon.
@@ -14275,6 +14419,20 @@ var TERM_POLL_MS = 250;
     "team-approve": function (n) { run("team.approve_plan", { run: n.dataset.id }).then(function () { return read("team.get", { run: n.dataset.id }); }).then(function (d) { TEAM.data = d; paintTeam(); loadHealth().then(function () { rail(); }); }); },
     "team-pause": function (n) { run("team.pause", { run: n.dataset.id }); },
     "team-resume": function (n) { run("team.resume", { run: n.dataset.id }); },
+    // A run stopped at its budget: raise the ceiling that stopped it, which carries the run on by
+    // itself. The run page's button and this one use the same rule.
+    "team-budget": function (n) {
+      var id = n.dataset.id;
+      read("team.get", { run: id }).then(function (d) {
+        var usage = (d && d.usage) || {}, budget = (d && d.budget) || {};
+        var used = usage.turns || 0, limit = budget.turns || 0;
+        var spent = usage.cost_usd || 0, usd = budget.usd || 0;
+        var args = { run: id };
+        if (usd > 0) args.budget_usd = spent >= usd ? Math.max(usd * 2, spent * 2) : usd;
+        if (limit > 0) args.max_turns = (limit > used ? limit : used) * 2;
+        return run("team.budget", args);
+      });
+    },
     "team-cancel": function (n) { run("team.cancel", { run: n.dataset.id }); },
     "team-retry": function (n) { uiPrompt({ title: "Try this task again", text: "What should it do differently? You can leave this empty.", input: { placeholder: "Optional note for the agent" }, confirm: "Retry" }).then(function (note) { if (note === null) return; run("team.retry", { task: n.dataset.id, note: note || undefined }); }); },
     "team-accept": function (n) { uiConfirm({ title: "Accept without the proof?", text: "devd asked for proof that this task worked and did not get it. The final report will say you accepted it by hand.", confirm: "Accept anyway", danger: true }).then(function (yes) { if (yes) run("team.accept", { task: n.dataset.id }); }); },
@@ -14734,6 +14892,60 @@ var TERM_POLL_MS = 250;
       closeMoreMenus();
       run("chat.settle", { thread: t.id, settled: n.dataset.settled === "1" }).then(function () { return pollThread(true); }).then(function () { refreshThreadList(); paintChat(true); });
     },
+    "thread-snooze": function (n) {
+      var t = AI.thread;
+      if (!t) return;
+      closeMoreMenus();
+      var args = { thread: t.id };
+      if (n.dataset.hours) {
+        args.until = new Date(Date.now() + Number(n.dataset.hours) * 3600e3).toISOString();
+      } else if (n.dataset.until === "tomorrow") {
+        var at = new Date();
+        at.setDate(at.getDate() + 1);
+        at.setHours(9, 0, 0, 0);
+        args.until = at.toISOString();
+      }
+      run("chat.snooze", args).then(function () { return pollThread(true); }).then(function () { refreshThreadList(); paintChat(true); });
+    },
+    "thread-changes": function () {      var t = AI.thread;
+      if (!t) return;
+      closeMoreMenus();
+      openProject(t.workdir || t.project, "changes");
+    },
+    "thread-worktree": function (n) {
+      var t = AI.thread;
+      if (!t) return;
+      closeMoreMenus();
+      var after = function () {
+        AI.changesFor = null;
+        return loadChanges(t.id).then(function () { return pollThread(true); }).then(function () { refreshThreadList(); paintChat(true); });
+      };
+      if (n.dataset.on === "1") return run("chat.worktree", { thread: t.id, action: "detach" }).then(after);
+      uiConfirm({
+        title: "Give this conversation its own worktree?",
+        text: "Its tools will work in a separate folder on its own branch, in the same repository, so this conversation's changes cannot collide with another piece of work. Nothing is deleted, and going back keeps the folder.",
+        confirm: "Start a worktree"
+      }).then(function (yes) {
+        if (!yes) return null;
+        return run("chat.worktree", { thread: t.id, action: "create" }).then(after);
+      });
+    },
+    "thread-open-pr": function () {
+      var t = AI.thread;
+      if (!t) return;
+      closeMoreMenus();
+      uiConfirm({
+        title: "Open a pull request for this branch?",
+        text: "The branch must already be pushed — a review is of commits the host can see. Its title and body are filled from the commits, and the review is linked to this conversation.",
+        confirm: "Open the pull request"
+      }).then(function (yes) {
+        if (!yes) return null;
+        return run("chat.pr", { thread: t.id }).then(function () {
+          AI.changesFor = null;
+          return loadChanges(t.id);
+        }).then(function () { return pollThread(true); }).then(function () { refreshThreadList(); paintChat(true); });
+      });
+    },
     "thread-find": function () {
       var bar = findBar();
       if (!bar) return;
@@ -14927,7 +15139,8 @@ var TERM_POLL_MS = 250;
       }
       var cap = n.dataset.cap, call = {};
       try { call = JSON.parse(n.dataset.args || "{}"); } catch (e) { call = {}; }
-      if (!cap) return;
+      // An action without a capability is a place to look, not a dead button.
+      if (!cap) return ACTIONS["team-open-from"]({ dataset: { id: n.dataset.run } });
       // Accepting without proof is the one action that needs a person to say yes twice.
       if (act === "accept") {
         return uiConfirm({ title: "Accept without the proof?", text: "devd asked for proof that this task worked and did not get it. The final report will say you accepted it by hand.", confirm: "Accept anyway", danger: true }).then(function (yes) {
@@ -16237,6 +16450,19 @@ var TERM_POLL_MS = 250;
       }
     },
 
+    "git-read": function (node) {
+      var path = node.dataset.path;
+      setGitRead(path, !gitRead(path));
+      render();
+    },
+    "git-read-all": function (node) {
+      var st = state.project.status || {};
+      var items = st[node.dataset.kind] || [];
+      var paths = items.map(function (c) { return typeof c === "string" ? c : c.path; });
+      var all = paths.length > 0 && paths.every(gitRead);
+      paths.forEach(function (path) { setGitRead(path, !all); });
+      render();
+    },
     "diff-file": function (node) {
       var path = node.dataset.path;
       var staged = node.dataset.staged === "1";
@@ -16974,9 +17200,44 @@ var TERM_POLL_MS = 250;
       toast("info", "Saved. It will send when devd is back.");
       return;
     }
+    // A first message that reads like a whole project is offered a run rather than quietly
+    // becoming a single agent's conversation: one real project went that way at 7.25 million
+    // input tokens in one context, with no plan, no worktree and no verdict. The offer is a
+    // question, never a decision - devd asks chat.suggest_mode and the person answers.
+    if (!args.__offered && !args.thread && !args.kind && args.message) {
+      args.__offered = true;
+      run("chat.suggest_mode", { text: args.message }, { quiet: true }).then(function (o) {
+        var offered = o && o.data && o.data.suggest_team;
+        if (offered && window.confirm("This looks like a team job - start a run and let the planner propose a plan?")) {
+          run("team.start", { goal: args.message, project: AI.project || undefined }, { quiet: true }).then(function (r) {
+            var id = r && r.data && r.data.id;
+            toast("ok", (id ? "Run " + String(id).slice(0, 8) + " is planning" : "A run is planning") + ". The plan comes to you before any work starts.");
+          }).catch(function (e) {
+            toast("error", (e && e.message) || "the run could not start");
+          });
+          return;
+        }
+        delete args.__offered;
+        sendChat(args);
+      }).catch(function () {
+        delete args.__offered;
+        sendChat(args);
+      });
+      return;
+    }
+    delete args.__offered;
     run("chat.send", args, { quiet: true, rethrow: true }).then(function (o) {
       if (!o) return;
       outboxRemove(args.client_id);
+      // In a room the message is said to the team, not only to the assistant: it becomes an
+      // instruction for the run, so speaking while it works steers the work instead of waiting for
+      // the assistant to relay it. A conversation outside a run has no one else to tell.
+      if (AI.roomFor && args.message) {
+        run("team.say", { run: AI.roomFor, text: args.message }, { quiet: true }).catch(function () {
+          // A run that has finished refuses a direction; that is not a failure of the message,
+          // which went to the conversation, so it is not shown as one.
+        });
+      }
       if (!args.thread) { draftSave(""); AI.askText = ""; }
       var id = (o.data && (o.data.id || o.data.thread)) || args.thread;
       if (!id) return;

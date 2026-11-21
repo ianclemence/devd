@@ -43,6 +43,8 @@ pub struct App {
     pub workspace: Arc<devd_workspace::Workspace>,
     /// The built-in agent and team; a long-lived command calls [`App::resume_agents`].
     pub agents: devd_bootstrap::Agents,
+    /// Where the start-up time went, phase by phase. Printed by the long-lived hosts.
+    pub startup: Vec<(&'static str, f64)>,
     /// Whether to emit JSON.
     pub json: bool,
     /// Whether to plan only.
@@ -81,6 +83,7 @@ impl App {
             registry: boot.registry,
             workspace: boot.workspace,
             agents: boot.agents,
+            startup: boot.startup,
             json,
             plan_only,
             assume_yes,

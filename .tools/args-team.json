@@ -1,0 +1,12 @@
+{
+  "project": "D:\\devd\\www\\welcome\\pulse",
+  "goal": "Implement the pulse status board exactly as README.md specifies: GET /api/metrics with measured checks (node, memory, workspace) and counters that include the reading request; the page showing a card per check, the counters and when it last read the service, polling every 5 seconds and reading immediately on Read now; one log line per request on stdout; HTTP-level tests for all of it; and docs/decisions.md recording why there are no dependencies, what in-memory counters mean after a restart, and where the memory ceiling comes from.",
+  "done_when": [
+    "npm test passes and covers the metrics shape, counters rising, the page being served, and a 404 counted as an error",
+    "/api/metrics returns measured checks, never constants, and counters include the request that read them",
+    "the page shows one card per check with its status colour, the counters and the last read time, and says so in the page when the service is unreachable",
+    "each request writes one line to stdout with method, path, status and duration",
+    "docs/decisions.md records the three decisions the README names"
+  ],
+  "parallel": 2
+}
