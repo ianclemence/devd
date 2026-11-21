@@ -43,6 +43,9 @@ pub struct PaneUi {
     pub terminal: bool,
     /// Whether the browser panel is open.
     pub browser: bool,
+    /// Whether the browser has taken the window: the conversation steps aside so the page is the
+    /// thing being looked at, the way a browser outside devd would be.
+    pub browser_maximised: bool,
     /// Its shells.
     pub term: TermUi,
     /// Whether the browser was running when last looked at, so a browser that has just started opens its panel.
@@ -317,11 +320,23 @@ pub fn pane(shell: &mut Shell, cx: &mut Context<Shell>) -> Option<AnyElement> {
             cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_pane(Tab::Browser, cx)),
             &t,
         );
+        // Give the browser the whole window, the way a browser outside devd has it. The page is
+        // already clickable and scrollable; what it lacked was the room to be the thing looked at.
+        let maximised = shell.pane.browser_maximised;
+        let maximise = icon_button(
+            "pane.browser.maximise",
+            if maximised { "chevron-down" } else { "chevron-up" },
+            cx.listener(|this, _: &ClickEvent, _, cx| {
+                this.pane.browser_maximised = !this.pane.browser_maximised;
+                cx.notify();
+            }),
+            &t,
+        );
         let mut panel = div().flex().flex_col().flex_1().min_h_0().child(header(
             "Browser",
             parts.tabs,
             parts.new,
-            vec![close],
+            vec![maximise, close],
             &t,
         ));
         panel = panel.child(
