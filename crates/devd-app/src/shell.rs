@@ -492,6 +492,14 @@ impl Shell {
         ));
     }
 
+    /// Put the conversation list away, or bring it back. Reading a long reply on a narrow window
+    /// should be able to use the whole width, and the way back has to be visible.
+    pub fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
+        let state = cx.global_mut::<crate::state::Devd>();
+        state.sidebar_collapsed = !state.sidebar_collapsed;
+        cx.notify();
+    }
+
     /// Run a command by id. The rail, the keys, the menu and an agent all end here.
     pub fn run(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.commands.used(id);

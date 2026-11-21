@@ -482,7 +482,8 @@ pub fn render(
         .into_any_element()
 }
 
-fn sidebar(current: Option<&str>, cx: &mut Context<Shell>) -> impl IntoElement {
+fn sidebar(current: Option<&str>, cx: &mut Context<Shell>) -> AnyElement {
+    let collapsed = cx.global::<crate::state::Devd>().sidebar_collapsed;
     let t = theme(cx).clone();
     let threads = devd(cx).sync.watch(&q::threads());
     let mut column = div().flex().flex_col().gap(px(1.0)).p(px(8.0));
@@ -589,6 +590,34 @@ fn sidebar(current: Option<&str>, cx: &mut Context<Shell>) -> impl IntoElement {
             )
         })),
     );
+    // Put away: a narrow column holding only the way back and a new conversation. The list beside
+    // it keeps its own layout, so toggling does not reflow the reply you are reading.
+    if collapsed {
+        return div()
+            .w(px(size::COLLAPSED))
+            .h_full()
+            .flex()
+            .flex_col()
+            .flex_none()
+            .items_center()
+            .gap(px(4.0))
+            .py(px(8.0))
+            .border_r_1()
+            .border_color(t.line)
+            .child(
+                Button::icon_only("sidebar.expand", "chevron-right")
+                    .kind(ButtonKind::Ghost)
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_sidebar(cx))),
+            )
+            .child(
+                Button::icon_only("sidebar.new", "plus")
+                    .kind(ButtonKind::Ghost)
+                    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                        this.run("conversation.new", window, cx)
+                    })),
+            )
+            .into_any_element();
+    }
     div()
         .w(px(size::SIDEBAR))
         .h_full()
@@ -623,6 +652,7 @@ fn sidebar(current: Option<&str>, cx: &mut Context<Shell>) -> impl IntoElement {
                 .child(column),
         )
         .child(clear)
+        .into_any_element()
 }
 
 /// One conversation in the list.
