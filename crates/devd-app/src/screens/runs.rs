@@ -541,7 +541,7 @@ fn run_page(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElement 
         .flex_1()
         .min_w_0()
         .h_full()
-        .child(ui::page("run.detail", 900.0, column));
+        .child(ui::page("run.detail", size::PAGE, column));
     let mut row = div().flex_1().min_w_0().h_full().flex().child(page);
     // The detail panel used to wait for a click on a task. A run's evidence, report and artifacts
     // live in it, so the page opened as one long column of list and graph with the substance

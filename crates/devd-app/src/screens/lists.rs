@@ -90,7 +90,7 @@ pub fn inbox(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
         "When an agent needs a decision, has a question, or proposes work, it arrives here.",
         cx,
     ) {
-        return ui::page("inbox", 860.0, column.child(shown)).into_any_element();
+        return ui::page("inbox", size::PAGE, column.child(shown)).into_any_element();
     }
     let mut list = card(cx).flex().flex_col().overflow_hidden();
     let mut primary_given = false;
@@ -222,7 +222,7 @@ pub fn inbox(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
                 .child(words),
         );
     }
-    ui::page("inbox", 860.0, column.child(list)).into_any_element()
+    ui::page("inbox", size::PAGE, column.child(list)).into_any_element()
 }
 
 /// How an inbox message reads: a word for what kind of thing it is, the sentence that says what needs you, and what it
@@ -323,7 +323,7 @@ pub fn sites(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
         "Create a site and it gets a .test name and a certificate.",
         cx,
     ) {
-        return ui::page("sites", 980.0, column.child(shown)).into_any_element();
+        return ui::page("sites", size::PAGE, column.child(shown)).into_any_element();
     }
     let mut list = div().flex().flex_col().gap(px(1.0));
     for site in all {
@@ -411,7 +411,7 @@ pub fn sites(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
         })));
         list = list.child(line);
     }
-    ui::page("sites", 980.0, column.child(list)).into_any_element()
+    ui::page("sites", size::PAGE, column.child(list)).into_any_element()
 }
 
 /// The server: its services, and the checks behind the health line.
@@ -685,7 +685,7 @@ pub fn server(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
                 .child(checks),
         );
     }
-    ui::page("server", 980.0, column).into_any_element()
+    ui::page("server", size::PAGE, column).into_any_element()
 }
 
 /// The team: every specialist, what it is for, what it must prove, and
@@ -737,7 +737,7 @@ pub fn team(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
         "The team's roles could not be read.",
         cx,
     ) {
-        return ui::page("team", 980.0, column.child(shown)).into_any_element();
+        return ui::page("team", size::PAGE, column.child(shown)).into_any_element();
     }
     // Grouped the way devd groups them: by the part of the work they own.
     let mut groups: Vec<(String, Vec<&Value>)> = Vec::new();
@@ -890,7 +890,7 @@ pub fn team(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
                 .child(list),
         );
     }
-    ui::page("team", 980.0, column).into_any_element()
+    ui::page("team", size::PAGE, column).into_any_element()
 }
 
 impl Shell {
