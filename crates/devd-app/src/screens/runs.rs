@@ -613,8 +613,8 @@ fn recreate_card(id: &str, cx: &mut Context<Shell>) -> Option<AnyElement> {
     );
     body = body.child(
         div()
-            .text_size(px(size::TEXT_SM))
-            .text_color(t.muted)
+            .text_size(px(size::TEXT_XS))
+            .text_color(t.faint)
             .child(format!(
                 "{captures} capture(s) · {checks} comparison(s){}",
                 if missing.is_empty() {
@@ -625,10 +625,12 @@ fn recreate_card(id: &str, cx: &mut Context<Shell>) -> Option<AnyElement> {
             )),
     );
     if !gaps.is_empty() {
+        // A mismatch is not more of the same grey: it is the one line on this block that is asking
+        // to be dealt with, so it carries the warning tone rather than sitting beside the counts.
         body = body.child(
             div()
                 .text_size(px(size::TEXT_SM))
-                .text_color(t.muted)
+                .text_color(t.tone(Tone::Warn))
                 .child(format!("Not matching yet: {}", gaps.iter().take(5).cloned().collect::<Vec<_>>().join("; "))),
         );
     }
