@@ -61,6 +61,10 @@ pub struct Devd {
     /// How many beats have passed, for the slow poll that keeps provider health from going stale.
     /// It counts up and is never reset, so the interval does not drift when `beat` wraps.
     pub beats: u32,
+    /// Whether the conversation list is collapsed to a rail. A 288px column of threads is often
+    /// the wrong shape on a narrow window or while reading a long reply, and there was no way to
+    /// put it away.
+    pub sidebar_collapsed: bool,
     /// Whether such a mark was drawn since the last beat. Only then is the
     /// window redrawn for the next one.
     pub live_seen: std::cell::Cell<bool>,
@@ -243,6 +247,7 @@ pub fn start(conn: Arc<Connection>, cx: &mut App) {
         pending_ui: Vec::new(),
         beat: 0,
         beats: 0,
+        sidebar_collapsed: false,
         live_seen: std::cell::Cell::new(false),
         link_root: None,
         chat_running: std::cell::Cell::new(false),

@@ -539,6 +539,9 @@ pub mod size {
     pub const STATUS: f32 = 26.0;
     /// A list that sits beside the main content.
     pub const SIDEBAR: f32 = 288.0;
+
+    /// That same list put away: a column wide enough for one control.
+    pub const COLLAPSED: f32 = 48.0;
     /// A row in a list.
     pub const ROW: f32 = 36.0;
     /// A button, an input, a tab.

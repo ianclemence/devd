@@ -329,6 +329,16 @@ fn reply_label(model: &str, (tokens, cost, ms): (u64, f64, u64)) -> String {
     parts.join(" · ")
 }
 
+/// Who a row belongs to, for spacing: every row of one turn shares a value, and a new value starts
+/// a new turn. The person and the assistant are different turns; the assistant and its own tool
+/// steps are one.
+fn turn_of(item: &Item) -> u8 {
+    match item {
+        Item::You { .. } => 0,
+        _ => 1,
+    }
+}
+
 /// An agent's turn is many model calls: a sentence, a tool, a sentence, a tool. Read together they are one
 /// reply, so the model that wrote it is named once, under the last thing it wrote before the person spoke
 /// again, not under every step.
@@ -482,7 +492,8 @@ pub fn render(
         .into_any_element()
 }
 
-fn sidebar(current: Option<&str>, cx: &mut Context<Shell>) -> impl IntoElement {
+fn sidebar(current: Option<&str>, cx: &mut Context<Shell>) -> AnyElement {
+    let collapsed = cx.global::<crate::state::Devd>().sidebar_collapsed;
     let t = theme(cx).clone();
     let threads = devd(cx).sync.watch(&q::threads());
     let mut column = div().flex().flex_col().gap(px(1.0)).p(px(8.0));
@@ -589,6 +600,34 @@ fn sidebar(current: Option<&str>, cx: &mut Context<Shell>) -> impl IntoElement {
             )
         })),
     );
+    // Put away: a narrow column holding only the way back and a new conversation. The list beside
+    // it keeps its own layout, so toggling does not reflow the reply you are reading.
+    if collapsed {
+        return div()
+            .w(px(size::COLLAPSED))
+            .h_full()
+            .flex()
+            .flex_col()
+            .flex_none()
+            .items_center()
+            .gap(px(4.0))
+            .py(px(8.0))
+            .border_r_1()
+            .border_color(t.line)
+            .child(
+                Button::icon_only("sidebar.expand", "chevron-right")
+                    .kind(ButtonKind::Ghost)
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_sidebar(cx))),
+            )
+            .child(
+                Button::icon_only("sidebar.new", "plus")
+                    .kind(ButtonKind::Ghost)
+                    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                        this.run("conversation.new", window, cx)
+                    })),
+            )
+            .into_any_element();
+    }
     div()
         .w(px(size::SIDEBAR))
         .h_full()
@@ -623,6 +662,7 @@ fn sidebar(current: Option<&str>, cx: &mut Context<Shell>) -> impl IntoElement {
                 .child(column),
         )
         .child(clear)
+        .into_any_element()
 }
 
 /// One conversation in the list.
@@ -1652,12 +1692,22 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
                 None => div().into_any_element(),
             },
         };
+        // A new speaker starts a turn, and a turn is worth more air than a step inside one. Every
+        // row used to get the same 7px above and below, so the fifth tool call of a turn and the
+        // first sentence of the next one looked equally far apart and the conversation read as a
+        // single block.
+        let opens_turn = match (items.get(index.saturating_sub(1)), items.get(index)) {
+            (None, _) => true,
+            (Some(previous), Some(current)) => turn_of(previous) != turn_of(current),
+            _ => false,
+        };
         div()
             .w_full()
             .flex()
             .justify_center()
             .px(px(24.0))
-            .py(px(7.0))
+            .pt(px(if opens_turn { 22.0 } else { 7.0 }))
+            .pb(px(7.0))
             .child(div().w_full().max_w(px(size::READING)).child(content))
             .into_any_element()
     })
