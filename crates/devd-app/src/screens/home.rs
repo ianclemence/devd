@@ -229,8 +229,10 @@ pub fn render(shell: &mut Shell, _window: &mut Window, cx: &mut Context<Shell>) 
         recent = recent.child(
             line.child(
                 div()
-                    .w(px(110.0))
-                    .flex_none()
+                    // The project name takes the room the row has; the age beside it keeps its
+                    // fixed width, because a short timestamp is read by position.
+                    .flex_1()
+                    .min_w_0()
                     .text_size(px(size::TEXT_SM))
                     .text_color(t.faint)
                     .child(ui::Clip::new(
