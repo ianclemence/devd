@@ -21,7 +21,7 @@ use gpui::{
     App, Bounds, ClipboardItem, Context, CursorStyle, ElementId, ElementInputHandler, Entity,
     EntityInputHandler, EventEmitter, FocusHandle, Focusable, GlobalElementId, KeyBinding,
     LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point,
-    ScrollHandle, ShapedLine, SharedString, Style, TextRun, UTF16Selection, UnderlineStyle, Window,
+    ScrollDelta, ScrollHandle, ScrollWheelEvent, ShapedLine, SharedString, Style, TextRun, UTF16Selection, UnderlineStyle, Window,
     actions, div, fill, point, prelude::*, px, relative, size,
 };
 use unicode_segmentation::*;
@@ -1320,6 +1320,34 @@ impl Render for TextInput {
             .on_action(cx.listener(Self::paste))
             .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::copy))
+            // A wheel scrolls the view of a multi-line field, not just moves the caret through it.
+            // The box used to follow only the cursor, so a message longer than the rows it shows
+            // could not be read at all: rows past the visible window had no way to be reached. The
+            // code editor scrolls its parent instead, so it is left alone here.
+            .on_scroll_wheel(cx.listener(|this, ev: &ScrollWheelEvent, window, cx| {
+                if this.multiline.is_none() || this.code || this.scroller.is_some() {
+                    return;
+                }
+                let most = this.multiline.unwrap_or(1).max(1);
+                let visible = this.lines.len().clamp(1, most);
+                if this.lines.len() <= visible {
+                    return;
+                }
+                let line_height = window.line_height();
+                let rows = match ev.delta {
+                    ScrollDelta::Lines(point) => -point.y.round() as isize,
+                    ScrollDelta::Pixels(point) => -(point.y / line_height).round() as isize,
+                };
+                if rows == 0 {
+                    return;
+                }
+                let last = this.lines.len() - visible;
+                let next = (this.first_row as isize + rows).clamp(0, last as isize) as usize;
+                if next != this.first_row {
+                    this.first_row = next;
+                    cx.notify();
+                }
+            }))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
