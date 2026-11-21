@@ -543,10 +543,25 @@ fn run_page(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElement 
         .h_full()
         .child(ui::page("run.detail", 900.0, column));
     let mut row = div().flex_1().min_w_0().h_full().flex().child(page);
-    if let Some(task) = focus.and_then(|key| {
+    // The detail panel used to wait for a click on a task. A run's evidence, report and artifacts
+    // live in it, so the page opened as one long column of list and graph with the substance
+    // hidden - which is most of "a pain to see the text, the artifacts". It opens on the task that
+    // is doing something, or the first that has anything to say.
+    let shown = focus.clone().or_else(|| {
         tasks
             .iter()
-            .find(|t| t["key"].as_str() == Some(key.as_str()))
+            .find(|t| working(t["state"].as_str().unwrap_or_default()))
+            .or_else(|| {
+                tasks
+                    .iter()
+                    .find(|t| t["result"].as_str().is_some_and(|r| !r.trim().is_empty()))
+            })
+            .and_then(|t| t["key"].as_str().map(str::to_string))
+    });
+    if let Some(task) = shown.as_deref().and_then(|key| {
+        tasks
+            .iter()
+            .find(|t| t["key"].as_str() == Some(key))
     }) {
         row = row.child(agent_panel(id, task, &data, cx));
     }
@@ -810,9 +825,10 @@ fn heading(
                         .child(title_of(run)),
                 )
                 .child(
+                    // The run's facts are meta: below the name, quiet, never the same weight as it.
                     div()
-                        .text_size(px(size::TEXT_SM))
-                        .text_color(t.muted)
+                        .text_size(px(size::TEXT_XS))
+                        .text_color(t.faint)
                         .child(facts.join("  ·  ")),
                 ),
         )
