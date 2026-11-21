@@ -406,7 +406,7 @@ pub fn render(shell: &mut Shell, _window: &mut Window, cx: &mut Context<Shell>) 
             ),
     );
 
-    ui::page("home", 980.0, column).into_any_element()
+    ui::page("home", size::PAGE, column).into_any_element()
 }
 
 /// "What do you work with?": the runtimes and databases devd can install, each one click, none installed unasked.

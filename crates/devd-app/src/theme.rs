@@ -537,6 +537,13 @@ pub mod size {
     pub const TOPBAR: f32 = 44.0;
     /// The strip along the bottom: health, mode, version.
     pub const STATUS: f32 = 26.0;
+    /// The widest a page's content column gets. One number for the whole app: screens used 860,
+    /// 900, 980 and 1040 for the same job, so the column changed width as you moved between them.
+    pub const PAGE: f32 = 980.0;
+
+    /// The same, for a page that shows diffs and file trees and needs the room.
+    pub const PAGE_WIDE: f32 = 1180.0;
+
     /// A list that sits beside the main content.
     pub const SIDEBAR: f32 = 288.0;
 

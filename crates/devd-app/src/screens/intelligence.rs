@@ -1336,7 +1336,7 @@ pub fn render(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
         }
         column = column.child(section);
     }
-    ui::page("intelligence", 1040.0, column).into_any_element()
+    ui::page("intelligence", size::PAGE, column).into_any_element()
 }
 
 #[cfg(test)]

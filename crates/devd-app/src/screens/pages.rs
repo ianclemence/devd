@@ -579,7 +579,7 @@ pub(super) fn frame_at(
     for part in body {
         column = column.child(part);
     }
-    ui::page(id, 980.0, column).into_any_element()
+    ui::page(id, size::PAGE, column).into_any_element()
 }
 
 /// Draw the page with this id.

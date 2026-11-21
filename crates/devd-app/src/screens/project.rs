@@ -312,7 +312,7 @@ pub fn render(
     column = column.children(ui::stale(&projects, cx));
     if !present {
         column = column.child(ui::empty("alert", "This folder is missing", "devd remembers the project but its folder is gone. Remove it from Projects, or put the folder back.", cx));
-        return ui::page("project", 1180.0, column).into_any_element();
+        return ui::page("project", size::PAGE_WIDE, column).into_any_element();
     }
     let ui_state = view_of(shell);
     let body = match tab {
@@ -339,7 +339,7 @@ pub fn render(
         ProjectTab::Agents => team(&dir, cx),
     };
     let _ = t;
-    ui::page("project", 1180.0, column.child(body)).into_any_element()
+    ui::page("project", size::PAGE_WIDE, column.child(body)).into_any_element()
 }
 
 /// A copy of what the page remembers, so drawing does not hold the shell.

@@ -125,7 +125,7 @@ pub fn activity(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
                 cx,
             ));
         }
-        return ui::page("activity", 980.0, column.child(waiting)).into_any_element();
+        return ui::page("activity", size::PAGE, column.child(waiting)).into_any_element();
     }
     if rows.is_empty() {
         return ui::page(
@@ -219,7 +219,7 @@ pub fn activity(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
         );
         list = list.child(line);
     }
-    ui::page("activity", 980.0, column.child(list)).into_any_element()
+    ui::page("activity", size::PAGE, column.child(list)).into_any_element()
 }
 
 /// How this window is set up.
@@ -306,5 +306,5 @@ pub fn settings(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
                 .child(eyebrow("POLICY", cx))
                 .child(rules),
         );
-    ui::page("settings", 980.0, column).into_any_element()
+    ui::page("settings", size::PAGE, column).into_any_element()
 }
