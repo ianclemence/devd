@@ -569,9 +569,21 @@ fn pick_row(
                 .child(ui::Clip::new(sub)),
         );
     line = line.child(text);
+    // What acts on an entry arrives with the pointer, or with the keyboard when the entry has focus. A list
+    // with a button on every line is a wall of buttons; a list whose actions appear on the line you are on
+    // is a list.
+    let group: &'static str = "pick.row";
+    let mut actions = div().flex().flex_none().items_center().gap(px(6.0));
     for (aid, act) in acts {
-        line = line.child(act_button(aid, act, ButtonKind::Ghost, cx));
+        let act: AnyElement = act_button(aid, act, ButtonKind::Ghost, cx).into_any_element();
+        actions = actions.child(
+            div()
+                .invisible()
+                .group_hover(group, |s| s.visible())
+                .child(act),
+        );
     }
+    line = line.group(group).child(actions);
     line.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| on_pick(this, cx)))
 }
 

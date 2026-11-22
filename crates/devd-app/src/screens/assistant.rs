@@ -2277,8 +2277,9 @@ fn draw(thread: &str, index: usize, item: &Item, resume: bool, cx: &App) -> AnyE
             if !*undone {
                 let (thread, event) = (thread.to_string(), *event);
                 row = row.child(
+                    // Undo puts files back: it removes what an agent wrote, so it is said in the colour of that.
                     Button::new(ui::nid("changes.undo", index), "Undo")
-                        .kind(ButtonKind::Ghost)
+                        .kind(ButtonKind::Danger)
                         .on_click(move |_, _, cx| {
                             devd(cx).sync.mutate(
                                 Mutation::new("chat.undo", json!({ "thread": thread, "event": event })).invalidating("chat"),

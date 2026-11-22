@@ -673,6 +673,9 @@ fn model_performance(rows: &[Scorecard], cx: &App) -> Div {
                         .flex_col()
                         .child(
                             div()
+                                // A model id is a value, not a state or a link: the text colour, in the face that
+                                // lines up with the figures beside it.
+                                .text_color(t.text)
                                 .font_family(if row.name == "not recorded" {
                                     crate::theme::SANS
                                 } else {

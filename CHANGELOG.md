@@ -10,6 +10,44 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.40.14] - 2026-11-22 - One keyboard, one scale
+
+A pass over the window with every screen captured and read against `docs/design/rules.md`.
+
+### Changed
+
+- **A list is a list.** Project rows, site rows, certificate rows, host rows and the git views
+  (changes, branches, stashes, recover, remotes, worktrees) no longer put a button on every line.
+  What acts on an entry arrives with the pointer, or with the keyboard when the entry has focus, so
+  `Stage`, `Switch`, `Delete`, `Branch from here` and `Drop` are one press away instead of a wall of
+  buttons beside every fact.
+- **One tab style.** The git sub-tabs use the same underlined tab as the row above them instead of a
+  filled pill, so two rows of tabs no longer look like two different controls.
+- **The breadcrumb says what the place is called.** It filled less than half of a 360 px box and cut
+  `devd` to `dev…` and `localhost` to `localho…`; it now takes the room the top bar has and shrinks
+  only when there is none.
+- **Colour is state.** Category chips (`Node.js`, `Rust`, the stage on a skill, a site's PHP version,
+  `reads only`) are plain secondary text, not tinted pills. The actor on Activity is no longer
+  accent-coloured, so it does not read as a link.
+- **Danger looks dangerous.** `Drop`, `Delete`, `Remove`, `Stop trusting`, `Delete all` mail and the
+  assistant's `Undo` use the danger button.
+- **Settings reads like one page.** The theme section sits on the same spacing scale as the rest of
+  the page, and the theme in use says so once, beside its name, instead of a coral border, a tick and
+  a green pill.
+- **Activity groups by actor.** Thirty-three lines of "You" are one heading.
+- **Notes name the lesson.** A note's title is what the run learned, not "What run <uuid> taught", and
+  the one action says what it keeps ("Keep what it learned").
+- **Skills carry their read count as words** ("read 3 times") instead of a bare `0` and "· never read"
+  appended to every description.
+
+### Fixed
+
+- **`devd call --args` and `--args-file` together** returned a capability error with a useless
+  conversion that clippy rejected, which failed `cargo clippy -D warnings` on every platform and so
+  the `ci` workflow.
+
+---
+
 ## [0.40.0] - 2026-11-20 - A project is offered a run
 
 ### Added

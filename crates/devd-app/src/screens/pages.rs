@@ -290,7 +290,13 @@ fn rows_card(rows: Vec<Row>, key: &'static str, cx: &mut Context<Shell>) -> Div 
         }
         for (a, act) in row.acts.into_iter().enumerate() {
             let id = ElementId::NamedInteger(format!("{key}.{n}.act").into(), a as u64);
-            line = line.child(act_button(id, act, ButtonKind::Secondary, cx));
+            // Removing something is said in the colour of removing it, even before the pointer finds it.
+            let kind = if act.ask.is_some() {
+                ButtonKind::Danger
+            } else {
+                ButtonKind::Ghost
+            };
+            line = line.child(act_button(id, act, kind, cx));
         }
         if row.open.is_some() {
             // A row that opens says so, instead of relying on the pointer alone.
@@ -1041,6 +1047,7 @@ fn remote(cx: &mut Context<Shell>) -> AnyElement {
 
 fn hosts(cx: &mut Context<Shell>) -> AnyElement {
     let snap = read(cx, "hosts.show");
+    let t = theme(cx).clone();
     let data = snap.data.as_deref();
     let entries = data
         .and_then(|d| d["entries"].as_array())
@@ -1054,6 +1061,8 @@ fn hosts(cx: &mut Context<Shell>) -> AnyElement {
         .and_then(|d| d["removing"].as_array())
         .map(Vec::as_slice)
         .unwrap_or(&[]);
+    // Names waiting to be written are the only ones that need a look; the ones already there are a plain list,
+    // not nine green "published" labels.
     let mut rows: Vec<Row> = adding
         .iter()
         .map(|e| Row {
@@ -1072,7 +1081,6 @@ fn hosts(cx: &mut Context<Shell>) -> AnyElement {
     rows.extend(entries.iter().map(|e| Row {
         title: text(e, "host"),
         sub: format!("points to {}", text(e, "address")),
-        state: Some((Tone::Ok, "published".to_string())),
         ..Row::default()
     }));
     let pending = adding.len() + removing.len();
@@ -1105,7 +1113,6 @@ fn hosts(cx: &mut Context<Shell>) -> AnyElement {
                 )
             })),
     );
-    let t = theme(cx).clone();
     let mut body = vec![
         list_or(
             &snap,
@@ -1183,19 +1190,21 @@ fn certificates(cx: &mut Context<Shell>) -> AnyElement {
         .map(|c| {
             let host = text(c, "host");
             let ready = c["key_present"] != json!(false);
+            // The certificate always names its own path and the row always says "ready": neither is news. What
+            // is shown is the host, and only a problem when there is one.
+            let _ = host;
             Row {
-                title: host.clone(),
-                sub: text(c, "cert"),
+                title: text(c, "host"),
+                sub: String::new(),
                 sub_is_path: true,
-                state: Some(if ready {
-                    (Tone::Ok, "ready".to_string())
+                state: if ready {
+                    None
                 } else {
-                    (Tone::Warn, "key is missing".to_string())
-                }),
-                acts: vec![
-                    Act::new("Issue again", "tls.issue", json!({ "host": host }))
-                        .busy(format!("Issuing a certificate for {host}…")),
-                ],
+                    Some((Tone::Warn, "key is missing".to_string()))
+                },
+                // Nine certificates in a row each offering the same button made a column of buttons out of a list
+                // of facts. Issuing one again is there for the pointer; "Issue a certificate" stays the one action.
+                acts: vec![],
                 ..Row::default()
             }
         })
@@ -1308,8 +1317,10 @@ fn mail(cx: &mut Context<Shell>) -> AnyElement {
         )
     };
     let actions = div().child(
+        // What removes the whole mailbox is not the ordinary secondary button it used to look like.
         Button::new("mail.clear", "Delete all")
             .icon("x")
+            .kind(ButtonKind::Danger)
             .disabled(total == 0)
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                 this.run_act(
@@ -1571,7 +1582,7 @@ fn skills(cx: &mut Context<Shell>) -> AnyElement {
     let snap = read(cx, "skills.list");
     let usage = read(cx, "skills.usage");
     let all = snap.list("");
-    let mut rows: Vec<Row> = all
+    let rows: Vec<Row> = all
         .iter()
         .map(|s| {
             let name = text(s, "name");
@@ -1586,14 +1597,8 @@ fn skills(cx: &mut Context<Shell>) -> AnyElement {
             let locked = used.as_ref().is_some_and(|u| u["locked"] == json!(true));
             let archived = text(s, "source") == "archived"
                 || used.as_ref().is_some_and(|u| u["archived"] == json!(true));
-            let mut sub = text(s, "description");
-            sub.push_str(if uses == 0 {
-                " · never read"
-            } else if uses == 1 {
-                " · read once"
-            } else {
-                " · read often"
-            });
+            let sub = text(s, "description");
+            let kind = text(s, "kind");
             let mut acts: Vec<Act> = Vec::new();
             if archived {
                 acts.push(Act::new("Restore", "skills.restore", json!({ "name": name })));
@@ -1627,21 +1632,27 @@ fn skills(cx: &mut Context<Shell>) -> AnyElement {
             }
             Row {
                 title: name.clone(),
-                tag: text(s, "kind"),
+                // The stage a skill belongs to is a fact about it, said beside its name; the state column is for
+                // states. How often it was read is a number, and it says what it counts.
+                tag: kind,
                 sub,
-                state: Some(if archived {
-                    (Tone::Neutral, "archived".to_string())
+                state: if archived {
+                    Some((Tone::Neutral, "archived".to_string()))
                 } else if locked {
-                    (Tone::Danger, "locked".to_string())
+                    Some((Tone::Danger, "locked".to_string()))
                 } else if pinned {
-                    (Tone::Ok, "pinned".to_string())
-                } else if own {
-                    (Tone::Info, "yours".to_string())
+                    Some((Tone::Ok, "pinned".to_string()))
                 } else {
-                    (Tone::Neutral, "built in".to_string())
-                }),
+                    None
+                },
                 acts,
-                side: uses.to_string(),
+                side: if uses == 0 {
+                    "never read".to_string()
+                } else if uses == 1 {
+                    "read once".to_string()
+                } else {
+                    format!("read {uses} times")
+                },
                 open: Some((
                     Detail::Skill,
                     QueryKey::new("skills.get", json!({ "name": name })),
@@ -1651,15 +1662,15 @@ fn skills(cx: &mut Context<Shell>) -> AnyElement {
             }
         })
         .collect();
-    // Your own skills first: they are the ones you can edit or delete.
-    rows.sort_by(|a, b| {
-        let own = |row: &Row| {
-            row.state
-                .as_ref()
-                .is_some_and(|(tone, _)| *tone == Tone::Info)
-        };
-        own(b).cmp(&own(a)).then_with(|| a.title.cmp(&b.title))
-    });
+    // Your own skills first: they are the ones you can edit or delete. They are also the ones whose source is not
+    // the built-in library.
+    let mut ordered: Vec<(bool, Row)> = rows
+        .into_iter()
+        .zip(all.iter().map(|s| text(s, "source") != "builtin"))
+        .map(|(row, own)| (own, row))
+        .collect();
+    ordered.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.title.cmp(&b.1.title)));
+    let rows: Vec<Row> = ordered.into_iter().map(|(_, row)| row).collect();
     let mine = all
         .iter()
         .filter(|s| text(s, "source") != "builtin")
@@ -1920,23 +1931,39 @@ fn notes(cx: &mut Context<Shell>) -> AnyElement {
                 .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
                 .unwrap_or_default();
             let skill = r["skill"]["name"].as_str().unwrap_or_default().to_string();
-            let mut sub = memory.join(" · ");
-            if !skill.is_empty() {
-                if !sub.is_empty() {
-                    sub.push_str(" · ");
+            // The lesson is what a person reads and judges; the run is where it came from. Prefixing the title
+            // with the run's id made every row say the same thing across the length of a UUID.
+            let n = run.chars().take(8).collect::<String>();
+            let first = memory.first().cloned().unwrap_or_else(|| {
+                if skill.is_empty() {
+                    "Nothing to remember from this run".to_string()
+                } else {
+                    format!("A skill: {skill}")
                 }
-                sub.push_str(&format!("skill proposal: {skill}"));
-            }
+            });
+            let rest = if memory.len() > 1 {
+                format!("and {} more", memory.len() - 1)
+            } else if !skill.is_empty() && !memory.is_empty() {
+                format!("skill: {skill}")
+            } else {
+                String::new()
+            };
             Row {
-                title: format!("What run {} taught", ui::leaf(&run)),
-                tag: "review".to_string(),
-                sub,
+                title: crate::ui::clip_chars(&first, 120),
+                tag: format!("run {n}"),
+                sub: rest,
                 state: Some((Tone::Warn, "waiting for you".to_string())),
                 acts: vec![
-                    Act::new("Accept all", "review.accept", json!({ "run": run, "which": "all" })).ask(
-                        "Accept this review?",
+                    // What is kept is the memory and the skill the row names; the button says exactly that.
+                    Act::new(
+                        if memory.is_empty() { "Install the skill" } else { "Keep what it learned" },
+                        "review.accept",
+                        json!({ "run": run, "which": "all" }),
+                    )
+                    .ask(
+                        "Keep what this run taught?",
                         "The memory lines go into the project's memory and the proposed skill is installed. Every later run then knows both. You can still edit or archive the skill.",
-                        "Accept the review",
+                        "Keep it",
                     ),
                     Act::new("Drop", "review.drop", json!({ "run": run })).ask(
                         "Drop this review?",

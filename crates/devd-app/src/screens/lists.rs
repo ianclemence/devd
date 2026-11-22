@@ -169,7 +169,14 @@ pub fn inbox(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
                     }),
             );
         }
-        // Where it comes from, what kind of thing it is, and when: one quiet line above what it says.
+        // Where it comes from, what kind of thing it is, and when: one quiet line above what it says. The
+        // body is shown as the one sentence a person needs, not as a paragraph of a model's report.
+        let opening = match shape.word.split_once(':') {
+            Some(_) => shape.about.clone(),
+            None => Some(shape.headline.clone()),
+        }
+        .map(|s| s.split("\n\n").next().unwrap_or(&s).split_whitespace().collect::<Vec<_>>().join(" "))
+        .unwrap_or_default();
         let project = message["project"].as_str().map(|p| ui::leaf(p).to_string());
         let mut context = div()
             .flex()
@@ -195,17 +202,13 @@ pub fn inbox(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
             .gap(px(6.0))
             .child(context)
             .child(
+                // One line of what it is: the list stays a list, and the run holds the report.
                 div()
-                    .text_size(px(size::TEXT_MD))
-                    .line_height(px(22.0))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(t.text)
-                    .line_clamp(3)
-                    .child(shape.headline.clone()),
+                    .min_w_0()
+                    .text_size(px(size::TEXT))
+                    .text_color(if is_open { t.text } else { t.muted })
+                    .child(ui::Clip::new(opening)),
             );
-        if let Some(about) = shape.about.clone() {
-            words = words.child(div().text_size(px(size::TEXT_SM)).text_color(t.muted).child(ui::Clip::new(about)));
-        }
         if is_open {
             words = words.child(div().pt(px(4.0)).child(actions));
         }
@@ -368,47 +371,79 @@ pub fn sites(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
                             site["detected"].as_str().unwrap_or_default().to_string(),
                         )),
                 ),
-        )
-        .child(pill(
-            match serving {
-                "no_entry" => "no entry point".to_string(),
-                other => other.replace('_', " "),
-            },
-            Tone::Neutral,
-            cx,
-        ));
+        );
+        // What a site is served by is a fact, not a state: words in the secondary colour, the same row on every
+        // line. Only the things that need a look carry a colour.
+        line = line.child(
+            div()
+                .flex_none()
+                .text_size(px(size::TEXT_SM))
+                .text_color(t.muted)
+                .child(match serving {
+                    "no_entry" => "no entry point".to_string(),
+                    other => other.replace('_', " "),
+                }),
+        );
         if let Some(php) = site["php_effective"].as_str() {
-            line = line.child(pill(format!("PHP {php}"), Tone::Neutral, cx));
+            line = line.child(
+                div()
+                    .flex_none()
+                    .text_size(px(size::TEXT_SM))
+                    .text_color(t.muted)
+                    .child(format!("PHP {php}")),
+            );
         }
         if site["in_hosts"] == json!(false) {
             line = line.child(pill("not in hosts", Tone::Warn, cx));
         }
         if site["certificate"] == json!(false) {
-            // Every .test site has this until HTTPS is set up, so it is said quietly.
-            line = line.child(pill("no certificate", Tone::Neutral, cx));
+            line = line.child(
+                div()
+                    .flex_none()
+                    .text_size(px(size::TEXT_SM))
+                    .text_color(t.faint)
+                    .child("no certificate"),
+            );
         }
         if !present {
             line = line.child(pill("folder missing", Tone::Warn, cx));
         }
+        // Open and Remove belong to the row the pointer is on; the address itself opens the site.
+        let open_url = url.clone();
+        let sitename = name.clone();
         line = line.child(
-            Button::icon_only(
-                gpui::ElementId::Name(format!("site.open.{name}").into()),
-                "external",
-            )
-            .on_click(move |_, _, cx| cx.open_url(&url)),
+            div()
+                .invisible()
+                .group_hover(format!("site.row.{name}"), |s| s.visible())
+                .flex()
+                .items_center()
+                .gap(px(4.0))
+                .child(
+                    Button::icon_only(
+                        gpui::ElementId::Name(format!("site.open.{name}").into()),
+                        "external",
+                    )
+                    .on_click(move |_, _, cx| cx.open_url(&open_url)),
+                ),
         );
         let gone = name.clone();
-        line = line.child(Button::new(gpui::ElementId::Name(format!("site.remove.{name}").into()), "Remove").kind(ButtonKind::Ghost).on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-            this.run_act(
-                super::pages::Act::new("Remove", "site.remove", json!({ "name": gone })).busy(format!("Removing {gone}…")).ask(
-                    format!("Remove the site {gone}?"),
-                    "devd deletes the site's record, its certificate and its web server entry. The project's folder and files are not touched.",
-                    "Remove site",
-                ),
-                window,
-                cx,
-            )
-        })));
+        line = line.child(
+            div()
+                .invisible()
+                .group_hover(format!("site.row.{sitename}"), |s| s.visible())
+                .child(Button::new(gpui::ElementId::Name(format!("site.remove.{name}").into()), "Remove").kind(ButtonKind::Ghost).on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                    this.run_act(
+                        super::pages::Act::new("Remove", "site.remove", json!({ "name": gone })).busy(format!("Removing {gone}…")).ask(
+                            format!("Remove the site {gone}?"),
+                            "devd deletes the site's record, its certificate and its web server entry. The project's folder and files are not touched.",
+                            "Remove site",
+                        ),
+                        window,
+                        cx,
+                    )
+                }))),
+        );
+        line = line.group(format!("site.row.{name}"));
         list = list.child(line);
     }
     ui::page("sites", size::PAGE, column.child(list)).into_any_element()
