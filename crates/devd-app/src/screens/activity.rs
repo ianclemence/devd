@@ -8,7 +8,7 @@
 //! spend and where they may send a project.
 
 use devd_app_core::toolname::{self, Phase};
-use gpui::{AnyElement, Context, div, prelude::*, px};
+use gpui::{AnyElement, Context, Div, FontWeight, div, prelude::*, px};
 use serde_json::{Value, json};
 
 use crate::shell::Shell;
@@ -20,17 +20,18 @@ use crate::ui::{self, Button, card, eyebrow, page_head, pill, rule};
 pub fn who(actor: &str) -> (String, Tone) {
     let (kind, name) = actor.split_once(':').unwrap_or((actor, ""));
     match kind {
+        // Who did it is not a link and not a selection: it is said in the muted text colour like every other fact.
         "human" => (
             match name {
                 "cli" => "You, in the terminal".to_string(),
                 "http" | "ui" | "app" | "" => "You".to_string(),
                 other => format!("You ({other})"),
             },
-            Tone::Accent,
+            Tone::Neutral,
         ),
         "agent" => (
             format!("Agent {}", name.trim_start_matches("devd-")),
-            Tone::Info,
+            Tone::Neutral,
         ),
         "system" => ("devd".to_string(), Tone::Neutral),
         _ => (actor.to_string(), Tone::Neutral),
@@ -141,10 +142,10 @@ pub fn activity(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
         .into_any_element();
     }
     let mut list = card(cx).flex().flex_col().overflow_hidden();
+    // The same actor on ten lines in a row is one fact. It is said once, as a heading, with the lines under it;
+    // "You" repeated ten times is a column that carries nothing.
+    let mut previous: Option<String> = None;
     for (n, row) in rows.iter().enumerate() {
-        if n > 0 {
-            list = list.child(rule(cx));
-        }
         let ok = row["ok"] != json!(false);
         let capability = row["capability"].as_str().unwrap_or_default();
         let args: Value = row["args"]
@@ -156,22 +157,27 @@ pub fn activity(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
             &args,
             if ok { Phase::Done } else { Phase::Failed },
         );
-        let (by, tone) = who(row["actor"].as_str().unwrap_or_default());
+        let (by, _tone) = who(row["actor"].as_str().unwrap_or_default());
+        if previous.as_deref() != Some(by.as_str()) {
+            if n > 0 {
+                list = list.child(rule(cx));
+            }
+            list = list.child(
+                div()
+                    .px(px(14.0))
+                    .pt(px(12.0))
+                    .pb(px(4.0))
+                    .child(eyebrow(by.to_uppercase(), cx)),
+            );
+            previous = Some(by.clone());
+        }
         let mut line = div()
             .px(px(14.0))
-            .py(px(9.0))
+            .py(px(7.0))
             .flex()
             .items_center()
             .gap(px(12.0))
             .child(ui::dot(if ok { Tone::Ok } else { Tone::Danger }, cx))
-            .child(
-                div()
-                    .w(px(150.0))
-                    .flex_none()
-                    .text_size(px(size::TEXT_SM))
-                    .text_color(t.tone(tone))
-                    .child(ui::Clip::new(by)),
-            )
             .child(
                 div()
                     .flex_1()
@@ -220,6 +226,55 @@ pub fn activity(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
         list = list.child(line);
     }
     ui::page("activity", size::PAGE, column.child(list)).into_any_element()
+}
+
+/// The appearance section: an eyebrow, a heading with one line under it, then the theme cards.
+///
+/// It reads the same scale as the rest of Settings (an eyebrow, a title, spacing of 12 and 22), so the
+/// section does not sit on 14 px gaps beside a page on 22 and look like two designs. The chosen theme says
+/// so once, in the card's heading; the border and the tick that repeated it are gone.
+fn theme_section(cx: &mut Context<Shell>) -> Div {
+    use super::appearance::CHARACTER;
+    use crate::theme::Theme as Shown;
+    let current = theme(cx).clone();
+    let mut grid = div().flex().flex_col().gap(px(12.0));
+    for row in CHARACTER.chunks(3) {
+        let mut line = div().flex().gap(px(12.0));
+        for (id, feel, scene) in row {
+            line = line.child(super::appearance::theme_card(
+                Shown::by_id(id),
+                (*feel).into(),
+                (*scene).into(),
+                None,
+                &current,
+                cx,
+            ));
+        }
+        for _ in row.len()..3 {
+            line = line.child(div().flex_1());
+        }
+        grid = grid.child(line);
+    }
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(12.0))
+        .child(eyebrow("APPEARANCE", cx))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(2.0))
+                .child(div().text_size(px(size::TEXT_LG)).font_weight(FontWeight::SEMIBOLD).child("Theme"))
+                .child(
+                    div()
+                        .text_size(px(size::TEXT_SM))
+                        .text_color(current.muted)
+                        .child("Each theme is a whole look: its own colours and its own picture behind every screen."),
+                ),
+        )
+        .child(grid)
+        .child(super::appearance::yours(&current, cx))
 }
 
 /// How this window is set up.
@@ -289,7 +344,7 @@ pub fn settings(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
                     cx,
                 )),
         )
-        .child(super::appearance::section(cx))
+        .child(theme_section(cx))
         .child(
             div()
                 .flex()
@@ -306,5 +361,5 @@ pub fn settings(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
                 .child(eyebrow("POLICY", cx))
                 .child(rules),
         );
-    ui::page("settings", size::PAGE, column).into_any_element()
+    ui::page("settings", 820.0, column).into_any_element()
 }

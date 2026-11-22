@@ -9,16 +9,16 @@
 //! hands a choice to the shell, which saves it and repaints.
 
 use gpui::{
-    App, ClickEvent, Context, Div, ElementId, FontWeight, ObjectFit, SharedString, div, img,
-    prelude::*, px,
+    ClickEvent, Context, Div, ElementId, FontWeight, ObjectFit, SharedString, div, img, prelude::*,
+    px,
 };
 
 use crate::shell::Shell;
-use crate::theme::{Library, Theme, Tone, size, theme};
-use crate::ui::{self, Button, ButtonKind, eyebrow};
+use crate::theme::{Library, Theme, Tone, size};
+use crate::ui::{self, Button, ButtonKind};
 
 /// What a person is told about each theme: how it feels, and what is behind it.
-const CHARACTER: [(&str, &str, &str); 5] = [
+pub const CHARACTER: [(&str, &str, &str); 5] = [
     (
         "sling",
         "Graphite and volt",
@@ -46,38 +46,12 @@ const CHARACTER: [(&str, &str, &str); 5] = [
     ),
 ];
 
-/// The section: a heading, the built-in themes three to a row, then the themes from files.
-pub fn section(cx: &mut Context<Shell>) -> Div {
-    let current = theme(cx).clone();
-    let mut grid = div().flex().flex_col().gap(px(14.0));
-    for row in CHARACTER.chunks(3) {
-        let mut line = div().flex().gap(px(14.0));
-        for (id, feel, scene) in row {
-            let shown = Theme::by_id(id);
-            line = line.child(theme_card(shown, (*feel).into(), (*scene).into(), None, &current, cx));
-        }
-        grid = grid.child(line);
-    }
-    div()
-        .flex()
-        .flex_col()
-        .gap(px(14.0))
-        .child(eyebrow("APPEARANCE", cx))
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(2.0))
-                .child(div().text_size(px(size::TEXT_LG)).font_weight(FontWeight::SEMIBOLD).child("Theme"))
-                .child(div().text_size(px(size::TEXT_SM)).text_color(current.muted).child("Each theme is a whole look: its own colours and its own picture behind every screen.")),
-        )
-        .child(grid)
-        .child(yours(&current, cx))
-}
+// The section itself is composed by the Settings screen, so the rules about eyebrows, headings and the spacing
+// scale live in the code that owns the page.
 
 /// Themes from files in the mods folder: the ones that can be used, as cards like the built-in ones,
 /// and the ones that cannot, each with what is wrong and a way to fix it.
-fn yours(current: &Theme, cx: &mut Context<Shell>) -> Div {
+pub fn yours(current: &Theme, cx: &mut Context<Shell>) -> Div {
     let library = Library::of(cx).clone();
     let folder = library.dir.clone();
     let make = Button::new("appearance.make", "Make a theme")
@@ -188,7 +162,7 @@ fn yours(current: &Theme, cx: &mut Context<Shell>) -> Div {
 }
 
 /// One theme: its preview, its name and character, and the colours it is made of.
-fn theme_card(
+pub fn theme_card(
     shown: Theme,
     feel: SharedString,
     scene: SharedString,
@@ -261,7 +235,7 @@ fn theme_card(
         .rounded(px(size::RADIUS_L + 4.0))
         .border_1()
         .cursor_pointer()
-        .child(preview(&shown, selected, cx))
+        .child(preview(&shown, selected))
         .child(body)
         .child(div().px(px(4.0)).pb(px(2.0)).child(swatches));
     let card = if selected {
@@ -273,7 +247,7 @@ fn theme_card(
 }
 
 /// A small window, drawn in a theme's own colours with its own scene behind it.
-fn preview(p: &Theme, selected: bool, cx: &App) -> Div {
+fn preview(p: &Theme, selected: bool) -> Div {
     // The scene is shown stronger than in the window: it is the point of the card.
     let scene = div()
         .absolute()
@@ -392,7 +366,7 @@ fn preview(p: &Theme, selected: bool, cx: &App) -> Div {
                 .child(bar(30.0, 3.5, p.on_accent)),
         );
 
-    let mut frame = div()
+    div()
         .relative()
         .w_full()
         .h(px(158.0))
@@ -400,57 +374,8 @@ fn preview(p: &Theme, selected: bool, cx: &App) -> Div {
         .rounded(px(size::RADIUS_L))
         .bg(p.bg)
         .border_1()
-        .border_color(p.line_strong)
+        .border_color(if selected { p.line_strong } else { p.line })
         .child(scene)
         .child(rail)
-        .child(content);
-    if selected {
-        // The tick, in the colour of the theme being worn.
-        let badge = div()
-            .absolute()
-            .top(px(8.0))
-            .right(px(8.0))
-            .size(px(20.0))
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded_full()
-            .bg(theme(cx).accent)
-            .shadow_sm()
-            .child(ui::icon("check", 12.0, theme(cx).on_accent));
-        frame = frame.child(badge);
-    }
-    frame
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn every_theme_has_a_card_and_every_card_a_theme_in_the_same_order() {
-        let cards: Vec<&str> = CHARACTER.iter().map(|(id, _, _)| *id).collect();
-        assert_eq!(
-            Theme::ORDER.to_vec(),
-            cards,
-            "the picker and the theme table must list the same themes in the same order"
-        );
-        for (id, feel, scene) in CHARACTER {
-            assert!(!feel.is_empty() && scene.ends_with('.'), "{id}");
-        }
-    }
-
-    #[test]
-    fn the_words_light_and_dark_are_not_used_to_describe_a_theme() {
-        for (id, feel, scene) in CHARACTER {
-            let text = format!("{feel} {scene}").to_lowercase();
-            assert!(
-                !text.contains("light mode")
-                    && !text.contains("dark mode")
-                    && !text.contains("dark ")
-                    && !text.contains(" dark"),
-                "{id}: {text}"
-            );
-        }
-    }
+        .child(content)
 }

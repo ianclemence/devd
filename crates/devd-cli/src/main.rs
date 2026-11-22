@@ -2009,8 +2009,7 @@ fn run(cli: Cli) -> Result<i32> {
                 (Some(_), Some(_)) => {
                     return Err(devd_core::DevdError::invalid(
                         "give --args or --args-file, not both",
-                    )
-                    .into());
+                    ));
                 }
                 (None, Some(path)) => Some(std::fs::read_to_string(&path).map_err(|e| {
                     devd_core::DevdError::invalid(format!("cannot read {}: {e}", path.display()))

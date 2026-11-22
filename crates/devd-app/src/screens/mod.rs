@@ -3,6 +3,8 @@
 
 pub mod activity;
 pub mod appearance;
+#[cfg(test)]
+mod appearance_tests;
 pub mod assistant;
 pub mod browser;
 pub mod compose;
