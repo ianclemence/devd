@@ -4092,10 +4092,16 @@ impl Team {
         } else {
             ""
         };
+        // Said as a sentence: "7 tasks finished; 6 passed a check devd ran.", not "7 task(s) finished, 6 with a passing
+        // verification run recorded by devd." This line is the first thing a person reads about a finished run.
         let summary = format!(
-            "{} task(s) finished, {} with a passing verification run recorded by devd.{}\n{}{}{}{}",
-            real.len(),
-            verified,
+            "{} finished; {} a check devd ran.{}\n{}{}{}{}",
+            if real.len() == 1 { "1 task".to_string() } else { format!("{} tasks", real.len()) },
+            match verified {
+                0 => "none passed".to_string(),
+                n if n == real.len() => if n == 1 { "it passed".to_string() } else { "all passed".to_string() },
+                n => format!("{n} passed"),
+            },
             if by_hand.is_empty() {
                 String::new()
             } else {

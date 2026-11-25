@@ -23,7 +23,7 @@ use serde_json::json;
 
 use crate::screens;
 use crate::state::{Devd, devd, q};
-use crate::theme::{Theme, Tone, mono, size, theme};
+use crate::theme::{Theme, Tone, size, theme};
 use crate::ui::input::{InputEvent, TextInput};
 use crate::ui::{self, Button, ButtonKind, icon, kbd, live_dot, tint};
 
@@ -939,7 +939,7 @@ impl Shell {
                 .flex_none()
                 .rounded(px(7.0)),
         );
-        let item = |route: Route, badge: usize, tone: gpui::Hsla, also: Option<gpui::Hsla>, cx: &mut Context<Self>| {
+        let item = |route: Route, tip: String, badge: usize, tone: gpui::Hsla, also: Option<gpui::Hsla>, cx: &mut Context<Self>| {
             let selected = current.on_rail(&route);
             let color = if selected { t.text } else { t.faint };
             let hover = t.hover;
@@ -955,6 +955,8 @@ impl Shell {
                 .justify_center()
                 .rounded(px(size::RADIUS + 2.0))
                 .cursor_pointer()
+                // An icon alone does not say where it goes. The name and its shortcut appear on hover.
+                .tooltip(ui::tip(tip))
                 .child(icon(ui::screen_icon(&route), 17.0, color))
                 .on_click(
                     cx.listener(move |this, _: &ClickEvent, window, cx| this.run(&id, window, cx)),
@@ -1013,7 +1015,14 @@ impl Shell {
             }
             el
         };
-        for route in Route::primary() {
+        // The rail answers three questions, and a hairline marks where one ends: what needs you (Home, Inbox), who does
+        // the thinking (Assistant, Runs, Team, Intelligence), and what it works on (Projects, Sites, Server).
+        let divider = || div().w(px(20.0)).h(px(1.0)).my(px(6.0)).flex_none().bg(t.line);
+        for (n, route) in Route::primary().into_iter().enumerate() {
+            if n == 2 || n == 6 {
+                rail = rail.child(divider());
+            }
+            let tip = format!("{}  ·  Ctrl+{}", route.title(), n + 1);
             // One badge, one colour: the colour of the most urgent state it counts. The Inbox and
             // the Runs button therefore cannot disagree with a red or amber row inside them.
             let (badge, tone, also) = match route {
@@ -1026,11 +1035,11 @@ impl Shell {
                 Route::Runs(_) => (going, t.tone(Tone::from(going_level)), None),
                 _ => (0, t.warn, None),
             };
-            rail = rail.child(item(route, badge, tone, also, cx));
+            rail = rail.child(item(route, tip, badge, tone, also, cx));
         }
         rail.child(div().flex_1())
-            .child(item(Route::Activity, 0, t.warn, None, cx))
-            .child(item(Route::Settings, 0, t.warn, None, cx))
+            .child(item(Route::Activity, "Activity".to_string(), 0, t.warn, None, cx))
+            .child(item(Route::Settings, "Settings".to_string(), 0, t.warn, None, cx))
     }
 
     fn topbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1214,10 +1223,14 @@ impl Shell {
                     "degraded" | "setup_incomplete" => Tone::Warn,
                     _ => Tone::Neutral,
                 };
-                (
-                    tone,
-                    data["headline"].as_str().unwrap_or("Checking").to_string(),
-                )
+                // Healthy is one short sentence here; the notes behind it are on the Server screen, where a person
+                // goes to read them. "Healthy, 4 optional notes" made a good day sound like homework.
+                let headline = if data["state"] == json!("healthy") {
+                    "Everything is running".to_string()
+                } else {
+                    data["headline"].as_str().unwrap_or("Checking").to_string()
+                };
+                (tone, headline)
             }
             None => (Tone::Neutral, "Checking the machine…".to_string()),
         };
@@ -1234,7 +1247,6 @@ impl Shell {
             .border_t_1()
             .border_color(t.line)
             .bg(t.surface)
-            .font_family(mono())
             .text_size(px(size::TEXT_XS))
             .text_color(t.faint)
             .child(
@@ -1286,14 +1298,14 @@ impl Shell {
             strip = strip.child(
                 div()
                     .text_color(t.muted)
-                    .child(format!("saving {pending}…")),
+                    .child("Saving…"),
             );
         }
         if !state.online {
             strip = strip.child(
                 div()
                     .text_color(t.warn)
-                    .child("live updates paused, reconnecting"),
+                    .child("Offline. Reconnecting…"),
             );
         }
         // A newer release: say so here, where it can always be seen, and install it from the same place.
@@ -1344,15 +1356,21 @@ impl Shell {
                     })),
             );
         }
+        // The version, and nothing else: which process serves the window and on which port is a diagnostic, kept
+        // for the moment someone asks, on hover, instead of being read on every screen.
+        let serving = format!(
+            "{} on 127.0.0.1:{}",
+            if state.conn.owner { "This window is devd" } else { "Connected to devd" },
+            state.conn.port
+        );
         strip
             .child(div().flex_1())
-            .child(if state.conn.owner {
-                "this window runs devd"
-            } else {
-                "attached to a running devd"
-            })
-            .child(format!("127.0.0.1:{}", state.conn.port))
-            .child(format!("devd {}", state.conn.version))
+            .child(
+                div()
+                    .id("status.version")
+                    .tooltip(ui::tip(serving))
+                    .child(format!("devd {}", state.conn.version)),
+            )
     }
 
     fn palette_overlay(&self, cx: &mut Context<Self>) -> Option<AnyElement> {

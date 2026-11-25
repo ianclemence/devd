@@ -113,15 +113,29 @@ impl Dictionary {
                 return true;
             }
         }
-        let stem = lower
-            .strip_suffix("'s")
-            .or_else(|| lower.strip_suffix('s'))
-            .or_else(|| lower.strip_suffix("ed"))
-            .or_else(|| lower.strip_suffix("ing"));
-        stem.is_some_and(|stem| {
-            stem.chars().count() >= 3
-                && (self.words.contains(stem) || self.words.contains(&format!("{stem}e")))
-        })
+        // An inflected word is known when its stem is: jump, jumps, jumped, jumping, jumper; stop, stopped;
+        // fix, fixes; quick, quickly.
+        ["'s", "s", "es", "ed", "ing", "er", "ers", "ly"]
+            .iter()
+            .filter_map(|suffix| lower.strip_suffix(suffix))
+            .any(|stem| self.knows_stem(stem))
+    }
+
+    /// Whether `stem`, the word with an ending taken off, is a known word: as it is, with the `e` the ending
+    /// dropped (paste → pasting), or with the consonant the ending doubled (stop → stopped).
+    fn knows_stem(&self, stem: &str) -> bool {
+        if stem.chars().count() < 3 {
+            return false;
+        }
+        if self.words.contains(stem) || self.words.contains(&format!("{stem}e")) {
+            return true;
+        }
+        let chars: Vec<char> = stem.chars().collect();
+        let n = chars.len();
+        n >= 4
+            && chars[n - 1] == chars[n - 2]
+            && !"aeiou".contains(chars[n - 1])
+            && self.words.contains(&chars[..n - 1].iter().collect::<String>())
     }
 
     /// Known words one slip away from `word`, nearest first.
@@ -329,6 +343,20 @@ mod tests {
                 "{typed}"
             );
         }
+    }
+
+    #[test]
+    fn the_words_of_a_coding_prompt_are_not_mistakes() {
+        // Seen in the composer: each of these was underlined in an ordinary sentence about a long paste.
+        let d = Dictionary::bundled();
+        let text = "the composer must handle a long paste, keep the caret visible, and scroll smoothly without jumping";
+        assert!(d.check(text).is_empty(), "{:?}", d.check(text).iter().map(|r| &text[r.clone()]).collect::<Vec<_>>());
+        // An ending on a known word, including the ones that double a consonant or drop an e.
+        for word in ["stopped", "pasting", "jumped", "fixes", "quickly", "builds"] {
+            assert!(d.knows(word), "{word}");
+        }
+        // And a slip is still a slip.
+        assert_eq!(d.check("teh"), vec![0..3]);
     }
 
     #[test]

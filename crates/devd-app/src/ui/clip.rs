@@ -67,7 +67,8 @@ fn fit(
     width_of: &dyn Fn(&str) -> Pixels,
     index_for: &dyn Fn(&str, Pixels) -> usize,
 ) -> String {
-    if width_of(text) <= room {
+    // Half a pixel of slack: a width rounded by layout is not a reason to cut a word.
+    if width_of(text) <= room + px(0.5) {
         return text.to_string();
     }
     let ellipsis = width_of("…");
@@ -139,8 +140,10 @@ impl Element for Clip {
                 .text_system()
                 .shape_line(text.clone(), font_size, &[run], None)
                 .width;
+            // Rounded up: layout rounds a box to whole pixels, and a box a fraction narrower than its text made
+            // paint decide it did not fit, so "kata" was drawn as "ka…" with the whole bar free.
             size(
-                known.width.unwrap_or(natural),
+                known.width.unwrap_or(px(f32::from(natural).ceil())),
                 known.height.unwrap_or(height),
             )
         });

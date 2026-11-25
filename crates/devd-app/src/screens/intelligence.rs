@@ -966,7 +966,7 @@ pub fn render(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
                 .flex_col()
                 .gap(px(8.0))
                 .child(eyebrow("MODEL PERFORMANCE", cx))
-                .child(div().text_size(px(size::TEXT_XS)).text_color(t.faint).child("Accepted on proof, checks passed, work redone and what it cost. Three finished tasks make a model rankable; below that the record is shown but not ranked."))
+                .child(div().text_size(px(size::TEXT_XS)).text_color(t.faint).child("Ranked by work accepted on proof, checks passed, rework and cost. A model is ranked after three finished tasks; before that its record is shown unranked."))
                 .child(model_performance(&model_rows, cx)),
         );
     }

@@ -631,7 +631,9 @@ fn recreate_card(id: &str, cx: &mut Context<Shell>) -> Option<AnyElement> {
             .text_size(px(size::TEXT_XS))
             .text_color(t.faint)
             .child(format!(
-                "{captures} capture(s) · {checks} comparison(s){}",
+                "{} · {}{}",
+                ui::counted(captures, "capture"),
+                ui::counted(checks, "comparison"),
                 if missing.is_empty() {
                     String::new()
                 } else {
@@ -766,6 +768,7 @@ fn heading(
         }
         _ => {}
     }
+    let mut delete = None;
     if !over(&state) {
         let cancel = run_id.clone();
         actions = actions.child(div().id("run.cancel.wrap").tooltip(ui::tip("Cancel the run")).child(Button::icon_only("run.cancel", "stop").on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
@@ -776,7 +779,7 @@ fn heading(
             run_id.clone(),
             run["title"].as_str().unwrap_or("this run").to_string(),
         );
-        actions = actions.child(
+        delete = Some(
             div()
                 .id("run.delete.wrap")
                 .tooltip(ui::tip("Delete the run"))
@@ -803,6 +806,8 @@ fn heading(
                 ),
         );
     }
+    // Deleting is last: the actions that keep the run read first, and the one that removes it sits at the end.
+    actions = actions.children(delete);
     div()
         .flex()
         .items_start()
@@ -1009,7 +1014,8 @@ fn result(run: &Value, tasks: &[Value], cx: &mut Context<Shell>) -> Option<AnyEl
         body = body.child(line);
     }
     if let Some(summary) = summary {
-        let blocks = devd_app_core::markdown::parse(summary);
+        let summary = without_byte_counts(summary);
+        let blocks = devd_app_core::markdown::parse(&summary);
         body = body.child(
             div()
                 .text_size(px(size::TEXT_MD))
@@ -1018,6 +1024,31 @@ fn result(run: &Value, tasks: &[Value], cx: &mut Context<Shell>) -> Option<AnyEl
         );
     }
     Some(section("RESULT", None, body.into_any_element(), cx))
+}
+
+/// A report with its cut marks said as a person would: "... [truncated 4613 bytes]" is a note from the program to
+/// itself, and a person reads it as an error. The cut stays visible as an ellipsis; the whole report is in the task.
+fn without_byte_counts(text: &str) -> String {
+    const MARK: &str = "... [truncated ";
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(MARK) {
+        let after = &rest[at + MARK.len()..];
+        let digits = after.chars().take_while(char::is_ascii_digit).count();
+        match after[digits..].strip_prefix(" bytes]") {
+            Some(tail) if digits > 0 => {
+                out.push_str(&rest[..at]);
+                out.push('…');
+                rest = tail;
+            }
+            _ => {
+                out.push_str(&rest[..at + MARK.len()]);
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// The definition of done, as a checklist: each line with what the final check found, or that it has not been checked yet.
@@ -1520,7 +1551,7 @@ fn agent_panel(run_id: &str, task: &Value, data: &Value, cx: &mut Context<Shell>
 
     // What it was asked.
     column = column.child(block(
-        "ITS BRIEF",
+        "BRIEF",
         paragraphs(
             task["instructions"].as_str().unwrap_or_default(),
             900,
@@ -1651,7 +1682,7 @@ fn agent_panel(run_id: &str, task: &Value, data: &Value, cx: &mut Context<Shell>
         .or(task["result"].as_str())
         .filter(|s| !s.is_empty())
     {
-        column = column.child(block("ITS REPORT", paragraphs(summary, 1200, t.muted)));
+        column = column.child(block("REPORT", paragraphs(summary, 1200, t.muted)));
     }
 
     // What it cost: its conversation's own usage.
@@ -1674,9 +1705,9 @@ fn agent_panel(run_id: &str, task: &Value, data: &Value, cx: &mut Context<Shell>
                     .text_size(px(size::TEXT_SM))
                     .text_color(t.muted)
                     .child(format!(
-                        "{cost}{} tokens  ·  {} attempts",
+                        "{cost}{} tokens  ·  {}",
                         ui::compact(tokens),
-                        task["attempts"].as_u64().unwrap_or(1)
+                        ui::counted(task["attempts"].as_u64().unwrap_or(1), "attempt")
                     )),
             ));
         }
@@ -1714,4 +1745,19 @@ fn title_of(run: &Value) -> String {
         kept = &kept[..open];
     }
     format!("{}…", kept.trim_end_matches(|c: char| c.is_whitespace() || matches!(c, ',' | ';' | ':' | '(' | '-')))
+}
+
+#[cfg(test)]
+mod byte_count_tests {
+    use super::without_byte_counts;
+
+    #[test]
+    fn a_cut_report_ends_in_an_ellipsis_not_a_byte_count() {
+        assert_eq!(
+            without_byte_counts("tests pass... [truncated 4613 bytes]\n\nNext"),
+            "tests pass…\n\nNext"
+        );
+        assert_eq!(without_byte_counts("a... [truncated x bytes]"), "a... [truncated x bytes]");
+        assert_eq!(without_byte_counts("nothing cut"), "nothing cut");
+    }
 }

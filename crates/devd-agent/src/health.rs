@@ -224,12 +224,14 @@ pub fn status(ctx: &Ctx) -> Result<Value> {
             let required = rows.iter().any(|r| r.required);
             let needed = rows.iter().any(|r| r.needed);
             let required_rows: Vec<&&devd_services::Status> = rows.iter().filter(|r| r.required).collect();
+            // A worker that answers FastCGI is up, whoever started it.
+            let up_now = |r: &devd_services::Status| r.running || (r.listening && r.ready == Some(true));
             let running = if required {
-                required_rows.iter().all(|r| r.running)
+                required_rows.iter().all(|r| up_now(r))
             } else {
-                rows.iter().any(|r| r.running)
+                rows.iter().any(|r| up_now(r))
             };
-            let up = required_rows.iter().filter(|r| r.running).count();
+            let up = required_rows.iter().filter(|r| up_now(r)).count();
             let (state, detail) = if required && !running {
                 (absent_state(booting), if booting { format!("{up} of {} needed PHP workers are up; devd is starting the rest", required_rows.len()) } else { format!("{up} of {} needed PHP workers are running", required_rows.len()) })
             } else if running {
@@ -268,6 +270,16 @@ pub fn status(ctx: &Ctx) -> Result<Value> {
                 format!(
                     "process is up (pid {}) but port {} is not answering yet",
                     s.pid.unwrap_or(0),
+                    s.port.unwrap_or(0)
+                ),
+            )
+        } else if s.listening && s.ready == Some(true) {
+            // Another program started it and it answers in its own protocol: the work it is needed for can be
+            // done. The Server screen said "answering" while the status bar called it a problem to fix.
+            (
+                "healthy",
+                format!(
+                    "answering on port {}; started outside devd",
                     s.port.unwrap_or(0)
                 ),
             )

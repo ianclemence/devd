@@ -319,7 +319,7 @@ fn reply_label(model: &str, (tokens, cost, ms): (u64, f64, u64)) -> String {
     if tokens > 0 {
         parts.push(format!("{} out", ui::compact(tokens)));
         if ms > 0 {
-            parts.push(format!("{:.0}/s", tokens as f64 / (ms as f64 / 1000.0)));
+            parts.push(format!("{:.0} tok/s", tokens as f64 / (ms as f64 / 1000.0)));
         }
     }
     if cost > 0.0 {
@@ -471,9 +471,10 @@ impl Default for Transcript {
 pub fn render(
     shell: &mut Shell,
     thread: Option<String>,
-    _window: &mut Window,
+    window: &mut Window,
     cx: &mut Context<Shell>,
 ) -> AnyElement {
+    use super::pane::{CONVERSATION_MIN, NARROWEST, STRIP};
     // The strip first: it opens the pane when the assistant has just started the browser.
     let strip = super::pane::strip(shell, cx);
     let current = thread.clone();
@@ -484,12 +485,24 @@ pub fn render(
     // A browser that has taken the window is the thing being looked at: the conversation and the
     // list step aside so the page has every pixel, and the strip stays so it can be given back.
     let maximised = shell.pane.browser_maximised && shell.pane.browser;
+    // The room a pane may take is what is left after the conversation keeps its minimum. When the window is too
+    // narrow for the list, the conversation and a usable pane, the list steps aside first: it is one click away,
+    // the conversation is what is being read.
+    let row_width = f32::from(window.viewport_size().width) - size::RAIL;
+    let collapsed = cx.global::<crate::state::Devd>().sidebar_collapsed;
+    let list_width = if collapsed { size::COLLAPSED } else { size::SIDEBAR };
+    let room_with_list = row_width - list_width - STRIP - CONVERSATION_MIN;
+    let show_list = !shell.pane.any() || room_with_list >= NARROWEST;
+    let room = if show_list { room_with_list } else { row_width - STRIP - CONVERSATION_MIN };
     let mut row = div().size_full().flex();
     if !maximised {
-        row = row.child(sidebar(current.as_deref(), cx)).child(main);
+        if show_list {
+            row = row.child(sidebar(current.as_deref(), cx));
+        }
+        row = row.child(main);
     }
     row = row
-        .children(super::pane::pane(shell, cx))
+        .children(super::pane::pane(shell, row_width, room, cx))
         .child(strip)
         .bg(ui::ground(cx));
     row.into_any_element()
@@ -1711,7 +1724,9 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
             .px(px(24.0))
             .pt(px(if opens_turn { 22.0 } else { 7.0 }))
             .pb(px(7.0))
-            .child(div().w_full().max_w(px(size::READING)).child(content))
+            // `min_w_0`: in a narrow column a row shrinks with it. Without it a row is at least as wide as its
+            // content, and a centred row wider than the column was cut off at the left edge.
+            .child(div().w_full().min_w_0().max_w(px(size::READING)).child(content))
             .into_any_element()
     })
     .size_full();
@@ -1955,8 +1970,10 @@ fn draw(thread: &str, index: usize, item: &Item, resume: bool, cx: &App) -> AnyE
         Item::You { text, pending } => div()
             .flex()
             .justify_end()
+            .min_w_0()
             .child(
                 div()
+                    .min_w_0()
                     .max_w(px(560.0))
                     .px(px(13.0))
                     .py(px(9.0))

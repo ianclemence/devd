@@ -94,6 +94,9 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("secondary-x", Cut, context),
         KeyBinding::new("home", Home, context),
         KeyBinding::new("end", End, context),
+        // Home and End already go to the start and end of the whole text, which is what Ctrl+Home and Ctrl+End mean.
+        KeyBinding::new("secondary-home", Home, context),
+        KeyBinding::new("secondary-end", End, context),
         KeyBinding::new("ctrl-left", WordLeft, context),
         KeyBinding::new("ctrl-right", WordRight, context),
         KeyBinding::new("alt-left", WordLeft, context),
@@ -868,6 +871,17 @@ struct PrepaintState {
     visible: usize,
 }
 
+/// The first row to show so the row `at` is inside a window of `visible` rows that started at `first_row`.
+fn follow(first_row: usize, at: usize, visible: usize) -> usize {
+    if at < first_row {
+        at
+    } else if at >= first_row + visible {
+        at + 1 - visible
+    } else {
+        first_row
+    }
+}
+
 /// The height of one row, from the field's bounds and the rows it shows.
 fn window_line_height_hint(bounds: Bounds<Pixels>, rows: usize, _first: usize, most: Option<usize>) -> Pixels {
     let shown = rows.clamp(1, most.unwrap_or(1).max(1));
@@ -1133,10 +1147,11 @@ impl Element for TextElement {
         // The rows this field shows, when the text has more: the view follows the cursor.
         let visible = input.multiline.map_or(1, |most| lines.len().clamp(1, most));
         let mut first_row = input.first_row.min(lines.len().saturating_sub(visible));
-        if at < first_row {
-            first_row = at;
-        } else if at >= first_row + visible {
-            first_row = at + 1 - visible;
+        // Only a cursor that has moved since the last paint brings the view to it. A wheel that scrolled away from a
+        // cursor standing still is left where it scrolled to; the next keystroke brings the view back.
+        let cursor_moved = input.viewed_cursor != Some(cursor);
+        if cursor_moved {
+            first_row = follow(first_row, at, visible);
         }
         let x_of = |index: usize, lines: &[(usize, ShapedLine)], at: usize| {
             lines[at]
@@ -1388,6 +1403,16 @@ mod tests {
         }
         assert_eq!(text, "gotest");
         assert_eq!(caret, 6..6);
+    }
+
+    #[test]
+    fn the_view_moves_only_as_far_as_the_cursor_needs() {
+        // Already in view: nothing moves.
+        assert_eq!(follow(10, 12, 8), 10);
+        // Above the window: it becomes the top row.
+        assert_eq!(follow(10, 3, 8), 3);
+        // Below the window: it becomes the bottom row.
+        assert_eq!(follow(10, 30, 8), 23);
     }
 
     #[test]

@@ -371,20 +371,26 @@ fn list(id: &str, ordered: bool, start: u64, items: &[Item], cx: &App) -> Div {
                 .child(format!("{}.", start + n as u64)),
             None => div().mt(px(8.0)).size(px(4.0)).rounded_full().bg(t.faint),
         };
+        // The marker sits in a gutter and the item's text has the whole width that is left, as a block. As a flex
+        // row with a shrinking text column, the text was measured at its narrowest (a word to a line) inside a page
+        // that scrolls, so a run's report took thousands of pixels of height it did not paint, and every section
+        // after it was pushed out of sight.
         column = column.child(
             div()
-                .flex()
-                .items_start()
-                .gap(px(9.0))
+                .relative()
+                .w_full()
+                .pl(px(27.0))
                 .child(
                     div()
+                        .absolute()
+                        .left_0()
+                        .top_0()
                         .w(px(18.0))
                         .flex()
-                        .flex_none()
                         .justify_end()
                         .child(marker),
                 )
-                .child(div().flex_1().min_w_0().child(document(
+                .child(div().w_full().child(document(
                     &format!("{id}.{n}"),
                     &item.blocks,
                     cx,

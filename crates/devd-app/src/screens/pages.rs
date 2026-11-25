@@ -1097,7 +1097,7 @@ fn hosts(cx: &mut Context<Shell>) -> AnyElement {
         )
     };
     let actions = div().child(
-        Button::new("hosts.sync", "Publish site names")
+        Button::new("hosts.sync", "Publish hostnames")
             .icon("globe")
             .kind(if pending > 0 {
                 ButtonKind::Primary
@@ -1758,9 +1758,14 @@ fn recreate(cx: &mut Context<Shell>) -> AnyElement {
             } else {
                 (Tone::Neutral, "studying".to_string())
             };
-            let mut sub = format!("run {run} · {captures} capture(s) · {checks} comparison(s) · {gaps} gap(s)");
+            let mut sub = format!(
+                "run {run} · {} · {} · {}",
+                ui::counted(captures, "capture"),
+                ui::counted(checks, "comparison"),
+                ui::counted(gaps as u64, "gap")
+            );
             if missing > 0 {
-                sub.push_str(&format!(" · {missing} screen(s) missing a width"));
+                sub.push_str(&format!(" · {} missing a width", ui::counted(missing as u64, "screen")));
             }
             if let Some(app) = r["app"].as_str().filter(|a| !a.is_empty()) {
                 sub.push_str(&format!(" · {app}"));

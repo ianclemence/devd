@@ -596,7 +596,8 @@ pub fn view(
             root = root.child(deferred(dismissable(menu, Open::Plus, cx)).with_priority(10));
         }
         Open::Model => {
-            let mut menu = popover(cx, below).w(px(340.0));
+            // Wide enough for the effort row: its label and six choices did not fit in 340px, and "Max" was cut off.
+            let mut menu = popover(cx, below).w(px(420.0));
             menu = menu.child(
                 div()
                     .px(px(10.0))

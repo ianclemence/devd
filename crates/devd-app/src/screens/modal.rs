@@ -788,8 +788,9 @@ fn detail_body(
                             "Study",
                             captures > 0,
                             format!(
-                                "{captures} capture(s) across {} screen(s){}",
-                                screens.len(),
+                                "{} across {}{}",
+                                ui::counted(captures, "capture"),
+                                ui::counted(screens.len() as u64, "screen"),
                                 if missing.is_empty() {
                                     String::new()
                                 } else {
@@ -806,7 +807,7 @@ fn detail_body(
                             "Check",
                             checks > 0,
                             match best {
-                                Some(s) => format!("{checks} comparison(s); closest measured {s:.0}% alike"),
+                                Some(s) => format!("{}; the closest was {s:.0}% alike", ui::counted(checks, "comparison")),
                                 None => "no comparison recorded yet".to_string(),
                             },
                         ))
@@ -814,7 +815,7 @@ fn detail_body(
                             "Ready",
                             proven,
                             if proven {
-                                format!("{} verification(s) passed; a similarity is not one of them", verified.len())
+                                format!("{} passed; a similarity is not one of them", ui::counted(verified.len() as u64, "verification"))
                             } else {
                                 "not proven: the rebuild's own checks have not passed".to_string()
                             },

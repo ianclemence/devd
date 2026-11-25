@@ -154,8 +154,19 @@ pub fn claim(paths: &Paths, port: u16, version: &str, role: &str) -> Result<Clai
                 }
                 // Unreadable or stale. Replace it and try again exactly once.
                 if attempt == 0 {
-                    let _ = std::fs::remove_file(&path);
-                    continue;
+                    match std::fs::remove_file(&path) {
+                        Ok(()) => continue,
+                        // Gone between the two reads: another process is claiming it now.
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                        // A stale record that cannot be removed is not a race with another devd, and
+                        // "try again" would fail forever. Say which file and why.
+                        Err(e) => {
+                            return Err(DevdError::conflict(format!(
+                                "the instance record {} is left over from a devd that is no longer running, and it could not be removed ({e}); delete it and start devd again",
+                                path.display()
+                            )));
+                        }
+                    }
                 }
                 return Err(DevdError::conflict(
                     "another devd process is claiming the instance record; try again",

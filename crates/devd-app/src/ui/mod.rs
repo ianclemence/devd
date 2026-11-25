@@ -1054,6 +1054,27 @@ pub fn page(id: impl Into<ElementId>, max_width: f32, content: impl IntoElement)
     )
 }
 
+/// A count with its noun in the right number: "1 task", "7 tasks", "1 attempt". A "(s)" on the end is how a program
+/// avoids the question, and a person reads it as one. Nouns whose plural is not "+s" pass it as `noun|plural`.
+pub fn counted(n: u64, noun: &str) -> String {
+    let (one, many) = match noun.split_once('|') {
+        Some((one, many)) => (one.to_string(), many.to_string()),
+        None => (noun.to_string(), format!("{noun}s")),
+    };
+    format!("{n} {}", if n == 1 { one } else { many })
+}
+
+#[cfg(test)]
+mod counted_tests {
+    #[test]
+    fn a_count_agrees_with_its_noun() {
+        assert_eq!(super::counted(1, "attempt"), "1 attempt");
+        assert_eq!(super::counted(3, "attempt"), "3 attempts");
+        assert_eq!(super::counted(0, "comparison"), "0 comparisons");
+        assert_eq!(super::counted(2, "screen"), "2 screens");
+    }
+}
+
 /// The last part of a path, which is how a project is named in a list.
 pub fn leaf(path: &str) -> &str {
     path.trim_end_matches(['/', '\\'])

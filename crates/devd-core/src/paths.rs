@@ -163,7 +163,10 @@ impl Paths {
     /// Create every directory in the layout, if missing.
     pub fn ensure(&self) -> Result<()> {
         for dir in self.layout() {
-            std::fs::create_dir_all(&dir)?;
+            // The path goes with the error: "Access is denied." alone did not say which folder devd was making.
+            std::fs::create_dir_all(&dir).map_err(|e| {
+                std::io::Error::new(e.kind(), format!("cannot create {}: {e}", dir.display()))
+            })?;
         }
         Ok(())
     }
