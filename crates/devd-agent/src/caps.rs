@@ -201,6 +201,30 @@ struct BrowserShot {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct BrowserViewport {
+    /// Width of the Browser pane in CSS pixels. Omit width and height to give the page back its own window.
+    #[serde(default)]
+    width: Option<u32>,
+    /// Height of the Browser pane in CSS pixels.
+    #[serde(default)]
+    height: Option<u32>,
+    /// The screen's scale factor (1 for a standard display, 2 for a high-density one).
+    #[serde(default)]
+    scale: Option<f64>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct BrowserHover {
+    /// X in CSS pixels in the pane.
+    x: f64,
+    /// Y in CSS pixels in the pane.
+    y: f64,
+    /// Tab id from browser.tabs.list. Omit to use the focused tab.
+    #[serde(default)]
+    tab: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct BrowserMouse {
     /// X in CSS pixels, as browser.screenshot reports the page.
     x: f64,
@@ -3483,6 +3507,51 @@ pub fn register(reg: &mut Registry, hub: Arc<Hub>, team: Arc<Team>) -> Result<()
         |ctx, a| {
             let v = browser::screenshot(ctx.paths.root(), a.tab.as_deref())?;
             Ok(Outcome::with_data(format!("captured {} bytes", v["bytes"]), v))
+        },
+    )?;
+    // The Browser pane's live view: what a person sees and points at, many times a second. These three are the
+    // window's own and are not recorded (see the registry's routine reads), as keystrokes in a terminal are not.
+    reg.define::<BrowserViewport>("browser.viewport", "Size the page to the Browser pane")
+    .description("Lays pages out at the size of devd's Browser pane while a person has it open, so a page is read at its own size and a point in the pane is a point in the page. Without width and height, pages get the browser's own window back. Only the window calls this.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .human_only()
+    .dry_run()
+    .handlers(
+        |_, _| simple("browser.viewport", "size the page to the Browser pane"),
+        |ctx, a| {
+            let size = match (a.width, a.height) {
+                (Some(w), Some(h)) => Some((w, h, a.scale.unwrap_or(1.0))),
+                _ => None,
+            };
+            let v = browser::viewport(ctx.paths.root(), size)?;
+            Ok(Outcome::with_data("sized", v))
+        },
+    )?;
+    reg.define::<BrowserTab>("browser.frame", "One live frame of the page")
+    .description("A JPEG of the focused tab at the Browser pane's size, written over the frames before it, for the pane's live view. It is not evidence and is not kept: an agent that needs a picture of what it did uses browser.screenshot.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .human_only()
+    .dry_run()
+    .handlers(
+        |_, _| simple("browser.frame", "draw the page"),
+        |ctx, a| {
+            let v = browser::frame(ctx.paths.root(), a.tab.as_deref())?;
+            Ok(Outcome::with_data("frame", v))
+        },
+    )?;
+    reg.define::<BrowserHover>("browser.hover", "Move the pointer over the page")
+    .description("Moves the pointer to `x`/`y` without pressing, so hover menus and styles answer as they do in a browser. This is the person's pointer in devd's Browser pane.")
+    .tier(Tier::Read)
+    .effect(Effect::Read)
+    .human_only()
+    .dry_run()
+    .handlers(
+        |_, a| simple("browser.hover", format!("point at ({}, {})", a.x, a.y)),
+        |ctx, a| {
+            let v = browser::hover(ctx.paths.root(), a.tab.as_deref(), a.x, a.y)?;
+            Ok(Outcome::with_data("pointed", v))
         },
     )?;
     reg.define::<BrowserTab>("browser.console", "Read console output and requests")

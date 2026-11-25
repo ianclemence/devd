@@ -135,6 +135,11 @@ struct Manager {
     /// Why the browser could not start, kept so a retry does not re-launch a
     /// doomed process on every call.
     last_error: Option<String>,
+    /// The size of devd's Browser pane while a person has it open: the page is laid out at that size, so it is
+    /// read at its real size instead of a 1440px page shrunk into a column. `None` is the agent's default window.
+    viewport: Option<(u32, u32, f64)>,
+    /// The live frames on disk, oldest first; only the last few are kept.
+    frames: std::collections::VecDeque<PathBuf>,
 }
 
 struct Tab {
@@ -144,6 +149,8 @@ struct Tab {
     /// The page's own icon URL, as a real browser tab shows.
     favicon: Option<String>,
     refs: BTreeMap<String, i64>,
+    /// The viewport this tab was last laid out at, so it is set again only when the pane's size changes.
+    sized: Option<(u32, u32, f64)>,
 }
 
 impl Manager {
@@ -223,7 +230,7 @@ impl Manager {
             if let Some(session) = v["sessionId"].as_str() {
                 let session = session.to_string();
                 enable(&mut *cdp, &session)?;
-                self.tabs.insert(id.clone(), Tab { session, url, title, favicon: None, refs: BTreeMap::new() });
+                self.tabs.insert(id.clone(), Tab { session, url, title, favicon: None, refs: BTreeMap::new(), sized: None });
             }
         }
         self.tabs.retain(|id, _| live.contains(id));
@@ -267,6 +274,7 @@ impl Manager {
             title: String::new(),
             favicon: None,
             refs: BTreeMap::new(),
+            sized: None,
         });
         self.focused = Some(id.clone());
         if let Some(url) = url.filter(|u| !u.is_empty()) {
@@ -1251,6 +1259,110 @@ pub fn screenshot(root: &Path, tab: Option<&str>) -> Result<Value> {
         "width": width,
         "height": height,
     }))
+}
+
+/// Lay the tab out at `viewport`, or at the browser's own window when there is none, if it is not already.
+fn fit(cdp: &mut Cdp, tab: &mut Tab, viewport: Option<(u32, u32, f64)>) -> Result<()> {
+    if tab.sized == viewport {
+        return Ok(());
+    }
+    match viewport {
+        Some((width, height, scale)) => {
+            cdp.call(
+                Some(&tab.session),
+                "Emulation.setDeviceMetricsOverride",
+                json!({ "width": width, "height": height, "deviceScaleFactor": scale, "mobile": false }),
+            )?;
+        }
+        None => {
+            cdp.call(Some(&tab.session), "Emulation.clearDeviceMetricsOverride", json!({}))?;
+        }
+    }
+    tab.sized = viewport;
+    Ok(())
+}
+
+/// The size of the pane a person is looking at the browser through, in CSS pixels and the screen's scale, or
+/// `None` when the pane closes. Pages are laid out at that size from then on, so a page is read at its own size
+/// and a click lands where it was aimed; when the pane closes, agents get the browser's own window back.
+pub fn viewport(root: &Path, size: Option<(u32, u32, f64)>) -> Result<Value> {
+    let mut m = lock();
+    m.ensure(root)?;
+    let size = size.map(|(w, h, s)| (w.clamp(200, 4096), h.clamp(150, 4096), s.clamp(1.0, 4.0)));
+    m.viewport = size;
+    let id = m.focused_tab(None)?;
+    let Manager { cdp, tabs, .. } = &mut *m;
+    let cdp = cdp.as_mut().ok_or_else(|| DevdError::invalid("the browser is not running"))?;
+    if let Some(tab) = tabs.get_mut(&id) {
+        fit(cdp, tab, size)?;
+    }
+    Ok(json!({ "state": "ok", "tab": id, "viewport": size.map(|(w, h, s)| json!({ "width": w, "height": h, "scale": s })) }))
+}
+
+/// One live frame of the focused tab for the Browser pane: a JPEG at the pane's size, written over the frames
+/// before it. A screenshot is evidence and is kept; a frame is the moving picture and is not.
+pub fn frame(root: &Path, tab: Option<&str>) -> Result<Value> {
+    /// Frames kept on disk: the one on screen, the one arriving, and one spare while the window swaps them.
+    const KEEP: usize = 3;
+    let mut m = lock();
+    m.ensure(root)?;
+    let id = m.focused_tab(tab)?;
+    let viewport = m.viewport;
+    let Manager { cdp, tabs, seq, frames, .. } = &mut *m;
+    let cdp = cdp.as_mut().ok_or_else(|| DevdError::invalid("the browser is not running"))?;
+    let tab_state = tabs.get_mut(&id).ok_or_else(|| DevdError::not_found(format!("there is no tab `{id}`")))?;
+    fit(cdp, tab_state, viewport)?;
+    let session = tab_state.session.clone();
+    let shot = cdp.call(
+        Some(&session),
+        "Page.captureScreenshot",
+        json!({ "format": "jpeg", "quality": 82, "captureBeyondViewport": false, "fromSurface": true }),
+    )?;
+    let encoded = shot["data"]
+        .as_str()
+        .ok_or_else(|| DevdError::internal("the browser returned no frame"))?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|e| DevdError::internal(format!("the frame was not valid base64: {e}")))?;
+    let dir = root.join("cache").join("browser-frames");
+    std::fs::create_dir_all(&dir)?;
+    *seq += 1;
+    let name = format!("frame-{}.jpg", *seq);
+    let path = dir.join(&name);
+    std::fs::write(&path, &bytes)?;
+    frames.push_back(path.clone());
+    while frames.len() > KEEP {
+        if let Some(old) = frames.pop_front() {
+            let _ = std::fs::remove_file(old);
+        }
+    }
+    let (url, title) = current_of(tabs, &id)?;
+    let (width, height) = viewport.map_or((0, 0), |(w, h, _)| (w, h));
+    Ok(json!({
+        "state": "ok",
+        "tab": id,
+        "url": url,
+        "title": title,
+        "path": path.display().to_string(),
+        "width": width,
+        "height": height,
+    }))
+}
+
+/// Move the pointer over the page without pressing, so hover menus and styles answer as they would in a browser.
+pub fn hover(root: &Path, tab: Option<&str>, x: f64, y: f64) -> Result<Value> {
+    let mut m = lock();
+    m.ensure(root)?;
+    let id = m.focused_tab(tab)?;
+    let Manager { cdp, tabs, .. } = &mut *m;
+    let cdp = cdp.as_mut().ok_or_else(|| DevdError::invalid("the browser is not running"))?;
+    let session = tabs.get(&id).ok_or_else(|| DevdError::not_found(format!("there is no tab `{id}`")))?.session.clone();
+    cdp.call(
+        Some(&session),
+        "Input.dispatchMouseEvent",
+        json!({ "type": "mouseMoved", "x": x, "y": y, "button": "none", "buttons": 0, "modifiers": 0 }),
+    )?;
+    Ok(json!({ "state": "ok", "tab": id }))
 }
 
 pub fn console(root: &Path, tab: Option<&str>) -> Result<Value> {

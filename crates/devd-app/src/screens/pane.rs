@@ -369,7 +369,8 @@ pub fn pane(shell: &mut Shell, row: f32, room: f32, cx: &mut Context<Shell>) -> 
                 .id("pane.browser.body")
                 .flex_1()
                 .min_h_0()
-                .overflow_y_scroll()
+                .flex()
+                .flex_col()
                 .child(parts.body),
         );
         if both {
