@@ -46,6 +46,7 @@ pub mod environment;
 pub mod flow;
 pub mod fs;
 pub mod gate;
+pub mod github;
 pub mod guardian;
 pub mod handoff;
 pub mod health;

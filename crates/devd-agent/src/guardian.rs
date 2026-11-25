@@ -207,6 +207,11 @@ pub fn evaluate_intake(ctx: &Ctx, team: &Arc<Team>) -> Result<usize> {
         if rules.is_empty() {
             continue;
         }
+        // GitHub's facts are items, each acted on once, rather than a state that holds for a while.
+        if crate::github::is_github(trigger) {
+            fired += evaluate_github(ctx, team, trigger, &rules);
+            continue;
+        }
         let facts = observed(ctx, trigger);
         for rule in rules {
             if !rule.enabled {
@@ -240,48 +245,90 @@ pub fn evaluate_intake(ctx: &Ctx, team: &Arc<Team>) -> Result<usize> {
                         // loop. Only a health check or a clock can start work.
                         continue;
                     }
-                    if rule.mode == "auto" && ctx.store.environment_mode() != "production" {
-                        match team.start(
-                            ctx,
-                            &StartRequest {
-                                budget_usd: None,
-                                max_turns: None,
-                                goal: rule.goal.clone(),
-                                project: Some(rule.project.clone()),
-                                new_project: None,
-                                parallel: 2,
-                                auto_approve: false,
-                                done_when: Vec::new(),
-                                max_rounds: 2,
-                                effort: None,
-                            },
-                        ) {
-                            Ok(run) => {
-                                ctx.events.emit_with(
-                                    "team.intake",
-                                    format!("{}: a run was started", rule.name),
-                                    json!({ "rule": rule.name, "run": run.id, "trigger": trigger }),
-                                );
-                            }
-                            Err(e) => {
-                                let _ = ctx.store.fail_effect(
-                                    "team.suggestion",
-                                    &format!("{}:{}", rule.project, rule.name),
-                                    &e.to_string(),
-                                    &(chrono::Utc::now() + chrono::Duration::minutes(30)).to_rfc3339(),
-                                );
-                            }
-                        }
-                    } else {
-                        // Observe, or production: say what would have happened and
-                        // let a person decide.
-                        intake::observe(ctx, &rule, detail)?;
-                    }
+                    act(ctx, team, &rule, trigger, detail)?;
                 }
             }
         }
     }
     Ok(fired)
+}
+
+/// Do what a rule that fired asks: start a run in `auto` (never in production), or record what would have been
+/// done for a person to decide.
+fn act(ctx: &Ctx, team: &Arc<Team>, rule: &IntakeRule, trigger: &str, detail: &str) -> Result<()> {
+    if rule.mode == "auto" && ctx.store.environment_mode() != "production" {
+        match team.start(
+            ctx,
+            &StartRequest {
+                budget_usd: None,
+                max_turns: None,
+                goal: rule.goal.clone(),
+                project: Some(rule.project.clone()),
+                new_project: None,
+                parallel: 2,
+                auto_approve: false,
+                done_when: Vec::new(),
+                max_rounds: 2,
+                effort: None,
+            },
+        ) {
+            Ok(run) => {
+                ctx.events.emit_with(
+                    "team.intake",
+                    format!("{}: a run was started", rule.name),
+                    json!({ "rule": rule.name, "run": run.id, "trigger": trigger }),
+                );
+            }
+            Err(e) => {
+                let _ = ctx.store.fail_effect(
+                    "team.suggestion",
+                    &format!("{}:{}", rule.project, rule.name),
+                    &e.to_string(),
+                    &(chrono::Utc::now() + chrono::Duration::minutes(30)).to_rfc3339(),
+                );
+            }
+        }
+    } else {
+        // Observe, or production: say what would have happened and let a person decide.
+        intake::observe(ctx, rule, detail)?;
+    }
+    Ok(())
+}
+
+/// Act on what GitHub said: each new issue, waiting pull request or red CI run is one event for each rule that
+/// watches it. An item a rule could not take yet (it is cooling down) stays unseen and is offered on a later pass,
+/// so nothing that arrives during a cooldown is lost; with no cooldown, every item is taken as it arrives.
+fn evaluate_github(ctx: &Ctx, team: &Arc<Team>, trigger: &str, rules: &[IntakeRule]) -> usize {
+    let mut projects: Vec<String> = rules.iter().filter(|r| r.enabled).map(|r| r.project.clone()).collect();
+    projects.sort();
+    projects.dedup();
+    if projects.is_empty() {
+        return 0;
+    }
+    let facts = crate::github::facts(ctx, trigger, &projects);
+    let mut fired = 0;
+    for rule in rules.iter().filter(|r| r.enabled) {
+        let now = chrono::Utc::now();
+        let mut taken = 0;
+        for fact in facts.iter().filter(|f| f.project == rule.project) {
+            // A rule with a cooldown takes one item a pass and waits; one without takes them all.
+            if taken > 0 && rule.cooldown_minutes() > 0 {
+                break;
+            }
+            if !rule.cooled_down(now) {
+                break;
+            }
+            let mut asked = rule.clone();
+            asked.goal = crate::github::fill(&rule.goal, fact);
+            if act(ctx, team, &asked, trigger, &fact.detail).is_ok() {
+                crate::github::mark_seen(ctx, fact);
+                let _ = ctx.store.record_intake(&rule.project, &rule.name, 0, true);
+                taken += 1;
+                fired += 1;
+            }
+        }
+    }
+    fired
 }
 
 /// The rules written for a project, in the words the team room shows.

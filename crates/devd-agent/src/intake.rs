@@ -30,6 +30,10 @@ pub const TRIGGERS: &[(&str, &str)] = &[
     ("health.down", "a watched site is down"),
     ("check.failed", "a project's own check (test, lint, build) failed"),
     ("schedule.missed", "a schedule was due while devd was not running"),
+    // What GitHub says about the project's repository; see [`crate::github`].
+    ("issue.opened", "a new issue is opened on the project's GitHub repository"),
+    ("pr.waiting", "a pull request on the project's repository is waiting for review"),
+    ("ci.failed", "CI failed on the project's default branch"),
 ];
 
 /// Whether `trigger` is one a rule may name.
@@ -211,6 +215,6 @@ mod tests {
     fn only_known_triggers_are_accepted() {
         assert!(known_trigger("check.failed") && known_trigger("health.down"));
         assert!(!known_trigger("vibes"), "a rule may not invent an event");
-        assert_eq!(TRIGGERS.len(), 3);
+        assert_eq!(TRIGGERS.len(), 6);
     }
 }

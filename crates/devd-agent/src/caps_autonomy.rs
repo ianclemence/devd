@@ -103,7 +103,9 @@ struct RuleWrite {
     project: String,
     /// Short name, unique within the project.
     name: String,
-    /// What to watch: `health.down`, `check.failed` or `schedule.missed`.
+    /// What to watch: `health.down`, `check.failed`, `schedule.missed`, or on the project's GitHub repository
+    /// `issue.opened`, `pr.waiting` and `ci.failed`. A GitHub rule acts once on each new item, and its goal may name
+    /// it with `{title}`, `{number}`, `{url}` and `{body}`.
     trigger: String,
     /// How many times in a row before it counts (`min_failures`, default 1), how
     /// long to wait after starting a run (`cooldown_minutes`, default 60), and
