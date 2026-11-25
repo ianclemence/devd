@@ -165,13 +165,15 @@ fn paragraphs(text: &str, limit: usize, colour: Hsla) -> Div {
 /// The screen.
 pub fn render(shell: &mut Shell, selected: Option<String>, cx: &mut Context<Shell>) -> AnyElement {
     let t = theme(cx).clone();
+    // No run chosen is not a blank page: the one that wants you comes first, then the one working, then the newest.
+    let selected = selected.or_else(|| first_to_read(cx));
     let detail: AnyElement = match selected {
         None => div()
             .flex_1()
             .child(ui::empty(
                 "runs",
-                "Choose a run",
-                "What it is doing, what it has cost, and who is working on what.",
+                "No runs yet",
+                "Hand the team a goal from a conversation, and its run appears here with who is working on what.",
                 cx,
             ))
             .into_any_element(),
@@ -1019,13 +1021,46 @@ fn result(run: &Value, tasks: &[Value], cx: &mut Context<Shell>) -> Option<AnyEl
     }
     if let Some(summary) = summary {
         let summary = without_byte_counts(summary);
-        let blocks = devd_app_core::markdown::parse(&summary);
+        // The headline is what a person reads; the long report (every task, every open criterion, the lessons) is
+        // there on request. Open, it was a wall of bullets that pushed the team and its tasks off the screen.
+        let cut = summary
+            .split_inclusive('\n')
+            .scan(0, |at, line| {
+                let start = *at;
+                *at += line.len();
+                Some((start, line))
+            })
+            .find(|(start, line)| *start > 0 && (line.trim().is_empty() || line.trim_start().starts_with(['-', '*', '•'])))
+            .map(|(start, _)| start);
+        let (head, rest) = match cut {
+            Some(at) if !summary[at..].trim().is_empty() => (summary[..at].trim().to_string(), Some(summary[at..].to_string())),
+            _ => (summary.clone(), None),
+        };
+        let key = format!("run.report:{}", run["id"].as_str().unwrap_or_default());
+        let open = cx.global::<crate::state::Devd>().open_steps.contains(&key);
+        let shown = if open { summary.clone() } else { head };
+        let blocks = devd_app_core::markdown::parse(&shown);
         body = body.child(
             div()
                 .text_size(px(size::TEXT_MD))
                 .line_height(px(22.0))
                 .child(ui::markdown::document("run.summary", &blocks, cx)),
         );
+        if rest.is_some() {
+            let toggle = key.clone();
+            body = body.child(
+                Button::new("run.report.toggle", if open { "Hide the full report" } else { "Show the full report" })
+                    .kind(ButtonKind::Ghost)
+                    .icon(if open { "chevron-up" } else { "chevron-down" })
+                    .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                        let state = cx.global_mut::<crate::state::Devd>();
+                        if !state.open_steps.remove(&toggle) {
+                            state.open_steps.insert(toggle.clone());
+                        }
+                        cx.notify();
+                    })),
+            );
+        }
     }
     Some(section("RESULT", None, body.into_any_element(), cx))
 }
@@ -1749,6 +1784,20 @@ fn title_of(run: &Value) -> String {
         kept = &kept[..open];
     }
     format!("{}…", kept.trim_end_matches(|c: char| c.is_whitespace() || matches!(c, ',' | ';' | ':' | '(' | '-')))
+}
+
+/// The run to open when none is chosen: one that needs a person, else one still working, else the newest.
+fn first_to_read(cx: &mut Context<Shell>) -> Option<String> {
+    let snap = devd(cx).sync.watch(&q::runs());
+    let runs = snap.list("");
+    let pick = |wanted: &dyn Fn(&str) -> bool| {
+        runs.iter()
+            .find(|r| wanted(r["state"].as_str().unwrap_or_default()))
+            .and_then(|r| r["id"].as_str().map(str::to_string))
+    };
+    pick(&needs_you)
+        .or_else(|| pick(&working))
+        .or_else(|| runs.first().and_then(|r| r["id"].as_str().map(str::to_string)))
 }
 
 #[cfg(test)]
