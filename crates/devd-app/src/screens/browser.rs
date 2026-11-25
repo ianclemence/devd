@@ -53,6 +53,9 @@ pub struct BrowserUi {
     /// The page as it is now, and its size in CSS pixels.
     live: Option<std::sync::Arc<gpui::RenderImage>>,
     live_size: (f32, f32),
+    /// The tab the picture is of. A frame of a tab that was closed or switched away from is never shown as the
+    /// tab that is open now.
+    live_tab: String,
     /// What keeps the picture moving while the pane is open.
     frames: Option<gpui::Task<()>>,
     /// The pane size last given to the page: width, height and the scale in hundredths.
@@ -161,23 +164,21 @@ pub fn parts(shell: &mut Shell, wide: f32, cx: &mut Context<Shell>) -> Parts {
             name,
             Some(lead),
             tab["focused"] == json!(true),
-            move |this, _, cx| {
+            move |_this, _, cx| {
                 crate::state::start_write(
                     cx,
                     surface::browser::tab_focus(&focus_id).mutation(),
                     None,
                     None,
                 );
-                this.browser_ui.want_shot = true;
             },
-            move |this, _, cx| {
+            move |_this, _, cx| {
                 crate::state::start_write(
                     cx,
                     surface::browser::tab_close(&close_id).mutation(),
                     None,
                     None,
                 );
-                this.browser_ui.want_shot = true;
             },
             cx,
         ));
@@ -196,7 +197,7 @@ pub fn parts(shell: &mut Shell, wide: f32, cx: &mut Context<Shell>) -> Parts {
     let new = super::pane::icon_button(
         "browser.tab.new",
         "plus",
-        cx.listener(move |this, _: &ClickEvent, _, cx| {
+        cx.listener(move |_this, _: &ClickEvent, _, cx| {
             let running = devd(cx)
                 .sync
                 .peek(&devd_app_core::sync::QueryKey::bare("browser.status"))
@@ -213,7 +214,6 @@ pub fn parts(shell: &mut Shell, wide: f32, cx: &mut Context<Shell>) -> Parts {
                 None,
                 None,
             );
-            this.browser_ui.want_shot = true;
         }),
         &t,
     );
@@ -224,7 +224,12 @@ pub fn parts(shell: &mut Shell, wide: f32, cx: &mut Context<Shell>) -> Parts {
             .p(px(16.0))
             .child(ui::skeleton("browser.sk", 200.0, cx))
             .into_any_element()
-    } else if !running {
+    } else if !running || tabs.is_empty() {
+        // No browser, or every tab closed: the start screen, not a page that will never arrive.
+        if let Some(old) = shell.browser_ui.live.take() {
+            cx.drop_image(old, None);
+        }
+        shell.browser_ui.live_tab.clear();
         empty(cx)
     } else {
         // The page takes the room; the console and what the assistant sees fold under it.
@@ -233,7 +238,7 @@ pub fn parts(shell: &mut Shell, wide: f32, cx: &mut Context<Shell>) -> Parts {
             .min_h_0()
             .flex()
             .flex_col()
-            .child(picture(shell, cx))
+            .child(picture(shell, &tab_id, cx))
             .child(panels(shell, cx))
             .into_any_element()
     };
@@ -275,7 +280,7 @@ fn toolbar(shell: &Shell, running: bool, cx: &mut Context<Shell>) -> AnyElement 
             super::pane::icon_button(
                 id,
                 icon,
-                cx.listener(move |this, _: &ClickEvent, _, cx| {
+                cx.listener(move |_this, _: &ClickEvent, _, cx| {
                     if devd(cx)
                         .sync
                         .peek(&devd_app_core::sync::QueryKey::bare("browser.status"))
@@ -288,7 +293,6 @@ fn toolbar(shell: &Shell, running: bool, cx: &mut Context<Shell>) -> AnyElement 
                             None,
                             None,
                         );
-                        this.browser_ui.want_shot = true;
                     }
                 }),
                 &t,
@@ -336,11 +340,17 @@ fn toolbar(shell: &Shell, running: bool, cx: &mut Context<Shell>) -> AnyElement 
 /// desktop page shrunk into a column), and is redrawn many times a second while the pane is open. A click on it is
 /// a click on the page at the same point, the pointer moving over it is the pointer moving over the page, the wheel
 /// scrolls it as far as the wheel turned, and keys typed on it go to it.
-fn picture(shell: &Shell, cx: &mut Context<Shell>) -> AnyElement {
+fn picture(shell: &Shell, tab: &str, cx: &mut Context<Shell>) -> AnyElement {
     let t = theme(cx).clone();
     let bounds = shell.browser_ui.bounds.clone();
     let scale = shell.browser_ui.scale.clone();
-    let live = shell.browser_ui.live.clone();
+    // Only a picture of the tab that is open: after a tab closes or another is chosen, the old page is not left
+    // standing while the new one loads.
+    let live = shell
+        .browser_ui
+        .live
+        .clone()
+        .filter(|_| !tab.is_empty() && shell.browser_ui.live_tab == tab);
     let (page_w, page_h) = shell.browser_ui.live_size;
     let (click_bounds, move_bounds, wheel_bounds) = (bounds.clone(), bounds.clone(), bounds.clone());
     let focus = shell.browser_ui.focus.clone();
@@ -542,11 +552,12 @@ fn keep_live(shell: &mut Shell, running: bool, cx: &mut Context<Shell>) {
                         }
                         return false;
                     }
-                    if let Some((image, width, height)) = got {
+                    if let Some((image, width, height, tab)) = got {
                         if let Some(old) = this.browser_ui.live.replace(image) {
                             cx.drop_image(old, None);
                         }
                         this.browser_ui.live_size = (width, height);
+                        this.browser_ui.live_tab = tab;
                         cx.notify();
                     }
                     true
@@ -565,7 +576,7 @@ fn keep_live(shell: &mut Shell, running: bool, cx: &mut Context<Shell>) {
 /// Ask devd for a frame and decode it into a picture the GPU draws: its pixels, and the page's size in CSS pixels.
 fn next_frame(
     backend: &dyn devd_app_core::sync::Backend,
-) -> Option<(std::sync::Arc<gpui::RenderImage>, f32, f32)> {
+) -> Option<(std::sync::Arc<gpui::RenderImage>, f32, f32, String)> {
     let reply = backend.invoke("browser.frame", &json!({})).ok()?;
     let value = match reply {
         devd_app_core::sync::Reply::Done(value) => value,
@@ -584,7 +595,8 @@ fn next_frame(
     let width = value["width"].as_f64().filter(|w| *w > 0.0).map_or(px_w, |w| w as f32);
     let height = value["height"].as_f64().filter(|h| *h > 0.0).map_or(px_h, |h| h as f32);
     let frame = image::Frame::new(rgba);
-    Some((std::sync::Arc::new(gpui::RenderImage::new([frame])), width, height))
+    let tab = value["tab"].as_str().unwrap_or_default().to_string();
+    Some((std::sync::Arc::new(gpui::RenderImage::new([frame])), width, height, tab))
 }
 
 /// The console and the page as the assistant reads it, below the page.
@@ -742,14 +754,21 @@ impl Shell {
             } else {
                 format!("https://{address}")
             };
-            // The first load starts the browser; later ones navigate the tab on screen.
-            let running = devd(cx)
+            // The first load starts the browser; later ones navigate the tab on screen, and with every tab closed a
+            // new tab opens on the address instead of a navigation that has no tab to go to.
+            let status = devd(cx)
                 .sync
                 .peek(&devd_app_core::sync::QueryKey::bare("browser.status"))
-                .and_then(|s| s.data.as_deref().map(|d| d["running"] == json!(true)))
+                .and_then(|s| s.data.as_deref().cloned());
+            let running = status.as_ref().is_some_and(|d| d["running"] == json!(true));
+            let has_tab = status
+                .as_ref()
+                .and_then(|d| d["tabs"].as_array().map(|t| !t.is_empty()))
                 .unwrap_or(false);
-            if running {
+            if running && has_tab {
                 surface::browser::navigate(&url)
+            } else if running {
+                surface::browser::tab_open(Some(&url))
             } else {
                 surface::browser::open(Some(&url))
             }
@@ -760,7 +779,6 @@ impl Shell {
             Some("Loading the page…".to_string()),
             None,
         );
-        self.browser_ui.want_shot = true;
         devd(cx).sync.invalidate("browser");
         cx.notify();
     }
