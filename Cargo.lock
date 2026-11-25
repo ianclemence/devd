@@ -2020,6 +2020,7 @@ dependencies = [
  "embed-resource",
  "futures",
  "gpui",
+ "image",
  "open",
  "serde",
  "serde_json",
