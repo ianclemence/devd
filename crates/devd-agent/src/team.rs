@@ -840,6 +840,21 @@ impl Team {
                 let text = format!("{subject}\n\n{body}");
                 let _ = self.ctx.store.queue_report(&run.id, thread, kind, &text);
                 self.ask_assistant_to_report(thread, &run.title, kind, &text);
+                // A finished run is also news in the Inbox. The conversation is where it is explained, but a person
+                // who has left it must still be told the work is done. News needs no answer, so it does not repeat a
+                // decision the conversation is already asking for.
+                if kind == "finished" {
+                    let _ = self.ctx.store.post_inbox_origin(
+                        "agent:devd-team",
+                        run.project.as_deref(),
+                        Some(&run.id),
+                        None,
+                        Some(kind),
+                        subject,
+                        body,
+                        false,
+                    );
+                }
             }
             None => {
                 let _ = self.ctx.store.post_inbox_origin(

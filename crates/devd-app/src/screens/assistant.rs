@@ -490,7 +490,7 @@ pub fn render(
     // the conversation is what is being read.
     let row_width = f32::from(window.viewport_size().width) - size::RAIL;
     let collapsed = cx.global::<crate::state::Devd>().sidebar_collapsed;
-    let list_width = if collapsed { size::COLLAPSED } else { size::SIDEBAR };
+    let list_width = if collapsed { size::COLLAPSED } else { cx.global::<crate::state::Devd>().list_width };
     let room_with_list = row_width - list_width - STRIP - CONVERSATION_MIN;
     let show_list = !shell.pane.any() || room_with_list >= NARROWEST;
     let room = if show_list { room_with_list } else { row_width - STRIP - CONVERSATION_MIN };
@@ -644,8 +644,11 @@ fn sidebar(current: Option<&str>, cx: &mut Context<Shell>) -> AnyElement {
             )
             .into_any_element();
     }
+    let wide = cx.global::<crate::state::Devd>().list_width;
+    let grip = ui::grip("sidebar.grip", crate::state::Edge::List, wide, false, cx);
     div()
-        .w(px(size::SIDEBAR))
+        .w(px(wide))
+        .relative()
         .h_full()
         .flex()
         .flex_col()
@@ -678,6 +681,7 @@ fn sidebar(current: Option<&str>, cx: &mut Context<Shell>) -> AnyElement {
                 .child(column),
         )
         .child(clear)
+        .child(grip)
         .into_any_element()
 }
 
@@ -1617,10 +1621,11 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
                 }))
                 .children((!facts.is_empty()).then(|| {
                     div()
-                        .flex_none()
+                        .min_w_0()
+                        .overflow_hidden()
                         .text_size(px(size::TEXT_SM))
                         .text_color(t.faint)
-                        .child(facts.join("  ·  "))
+                        .child(ui::Clip::new(facts.join("  ·  ")))
                 })),
         )
         .child(actions);

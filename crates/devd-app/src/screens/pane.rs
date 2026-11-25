@@ -322,10 +322,12 @@ pub fn pane(shell: &mut Shell, row: f32, room: f32, cx: &mut Context<Shell>) -> 
     // Alone, a pane takes the room; beside another pane, it stays the compact column. Either way it never takes
     // the conversation's own minimum: `room` is what is left once that is kept. Taking a share of the window with
     // nothing kept for the conversation squeezed it to a sliver when the terminal opened.
-    let wanted = if both { WIDTH } else { row * SHARE };
+    let wanted = cx.global::<crate::state::Devd>().pane_width.unwrap_or(if both { WIDTH } else { row * SHARE });
     let width = wanted.min(room).max(NARROWEST);
+    let grip = ui::grip("pane.grip", crate::state::Edge::Pane, width, true, cx);
     let column = div().w(px(width));
     let mut column = column
+        .relative()
         .h_full()
         .flex_none()
         .flex()
@@ -419,6 +421,7 @@ pub fn pane(shell: &mut Shell, row: f32, room: f32, cx: &mut Context<Shell>) -> 
         };
         column = column.child(panel);
     }
+    column = column.child(grip);
     Some(
         ui::motion::slide_in(
             column.id("pane.panels"),

@@ -1267,3 +1267,34 @@ mod tests {
         assert_eq!(tool_mark_file("nuxt"), None);
     }
 }
+
+/// A strip along one edge of a column that is taken and moved with the mouse, to make the column wider or narrower.
+///
+/// It sits inside the column, on the edge named by `left`, so it never takes room from what is beside it. The shell
+/// watches the pointer while it is held (see `Shell::drag_to`), so the strip only has to start the drag.
+pub fn grip(
+    id: &'static str,
+    edge: crate::state::Edge,
+    width: f32,
+    left: bool,
+    cx: &mut gpui::Context<crate::shell::Shell>,
+) -> AnyElement {
+    let t = theme(cx).clone();
+    let hot = tint(t.accent, 0.3);
+    let strip = div()
+        .id(id)
+        .absolute()
+        .top_0()
+        .bottom_0()
+        .w(px(7.0))
+        .cursor_col_resize()
+        .hover(move |s| s.bg(hot))
+        .on_mouse_down(
+            gpui::MouseButton::Left,
+            cx.listener(move |_, ev: &gpui::MouseDownEvent, _, cx| {
+                cx.global_mut::<crate::state::Devd>().drag = Some((edge, f32::from(ev.position.x), width));
+                cx.stop_propagation();
+            }),
+        );
+    if left { strip.left(px(-3.0)) } else { strip.right(px(-3.0)) }.into_any_element()
+}

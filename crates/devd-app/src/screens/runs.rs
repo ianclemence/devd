@@ -410,8 +410,11 @@ fn list(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
             )
         })),
     );
+    let wide = cx.global::<crate::state::Devd>().list_width + 40.0;
+    let grip = ui::grip("runs.grip", crate::state::Edge::Runs, wide - 40.0, false, cx);
     div()
-        .w(px(size::SIDEBAR + 40.0))
+        .w(px(wide))
+        .relative()
         .h_full()
         .flex()
         .flex_col()
@@ -446,6 +449,7 @@ fn list(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
                 .child(column),
         )
         .child(clear)
+        .child(grip)
         .into_any_element()
 }
 

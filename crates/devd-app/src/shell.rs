@@ -35,6 +35,7 @@ actions!(
         Forward,
         NewConversation,
         ToggleTheme,
+        ToggleRail,
         Go1,
         Go2,
         Go3,
@@ -65,6 +66,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("secondary-[", Back, None),
         KeyBinding::new("secondary-]", Forward, None),
         KeyBinding::new("secondary-shift-l", ToggleTheme, None),
+        KeyBinding::new("secondary-b", ToggleRail, None),
         KeyBinding::new("secondary-1", Go1, None),
         KeyBinding::new("secondary-2", Go2, None),
         KeyBinding::new("secondary-3", Go3, None),
@@ -226,6 +228,25 @@ pub fn commands() -> Commands {
             Section::View,
         )
         .key("secondary-k"),
+    );
+    table.add(
+        Command::new(
+            "view.rail",
+            "Hide or show the navigation",
+            "Put the left-hand navigation away, so the screen has the whole window",
+            Section::View,
+        )
+        .key("secondary-b")
+        .keywords(&["sidebar", "navbar", "collapse", "menu"]),
+    );
+    table.add(
+        Command::new(
+            "view.list",
+            "Hide or show the conversation list",
+            "Put the list of conversations away, or bring it back",
+            Section::View,
+        )
+        .keywords(&["sidebar", "collapse", "conversations"]),
     );
     table.add(
         Command::new(
@@ -521,6 +542,16 @@ impl Shell {
                 crate::backend::stop_resident(&home);
                 devd(cx).allow_close.set(true);
                 cx.quit();
+                return;
+            }
+            "view.rail" => {
+                let state = cx.global_mut::<Devd>();
+                state.rail_hidden = !state.rail_hidden;
+                cx.notify();
+                return;
+            }
+            "view.list" => {
+                self.toggle_sidebar(cx);
                 return;
             }
             "view.theme" => {
@@ -1186,6 +1217,7 @@ impl Shell {
             .px(px(12.0))
             .border_b_1()
             .border_color(t.line)
+            .child(arrow("sidebar", true, "view.rail", cx))
             .child(arrow("arrow-left", self.history.can_back(), "go.back", cx))
             .child(arrow(
                 "arrow-right",
@@ -1971,6 +2003,7 @@ impl Render for Shell {
             .on_action(
                 cx.listener(|this, _: &ToggleTheme, window, cx| this.run("view.theme", window, cx)),
             )
+            .on_action(cx.listener(|this, _: &ToggleRail, window, cx| this.run("view.rail", window, cx)))
             .on_action(
                 cx.listener(|this, _: &Refresh, window, cx| this.run("view.refresh", window, cx)),
             )
@@ -2019,7 +2052,19 @@ impl Render for Shell {
             .child(ui::wash(cx))
             .child(ui::picture(cx))
             .child(ui::art(cx))
-            .child(self.rail(cx))
+            .children((!devd(cx).rail_hidden).then(|| self.rail(cx)))
+            .on_mouse_move(cx.listener(|this, ev: &gpui::MouseMoveEvent, window, cx| {
+                if devd(cx).drag.is_some() {
+                    if ev.pressed_button == Some(gpui::MouseButton::Left) {
+                        this.drag_to(f32::from(ev.position.x), window, cx);
+                    } else {
+                        cx.global_mut::<Devd>().drag = None;
+                    }
+                }
+            }))
+            .on_mouse_up(gpui::MouseButton::Left, cx.listener(|_, _: &gpui::MouseUpEvent, _, cx| {
+                cx.global_mut::<Devd>().drag = None;
+            }))
             .child(
                 div()
                     .flex_1()
@@ -2045,5 +2090,28 @@ impl Render for Shell {
             .children(self.modal_overlay(cx))
             .children(self.decision_overlay(cx))
             .children(self.palette_overlay(cx))
+    }
+}
+
+impl Shell {
+    /// Move the edge being dragged to where the pointer is. A column keeps a width a screen can use: the list stays
+    /// readable, the pane stays usable, and the conversation always keeps what it needs.
+    fn drag_to(&mut self, x: f32, window: &Window, cx: &mut Context<Self>) {
+        use crate::state::Edge;
+        let Some((edge, from, start)) = devd(cx).drag else {
+            return;
+        };
+        let view = f32::from(window.viewport_size().width) - size::RAIL;
+        let moved = x - from;
+        let state = cx.global_mut::<Devd>();
+        match edge {
+            Edge::List | Edge::Runs => state.list_width = (start + moved).clamp(200.0, (view * 0.5).max(240.0)),
+            Edge::Pane => {
+                let most = (view - state.list_width - screens::pane::STRIP - screens::pane::CONVERSATION_MIN)
+                    .max(screens::pane::NARROWEST);
+                state.pane_width = Some((start - moved).clamp(screens::pane::NARROWEST, most));
+            }
+        }
+        cx.notify();
     }
 }
