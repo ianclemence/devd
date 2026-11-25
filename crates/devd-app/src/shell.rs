@@ -361,8 +361,9 @@ impl Shell {
         ));
         crate::mark(&crate::DICT_MS);
         let composer = cx.new(|cx| {
+            // Twelve rows before it scrolls: room to read back a long prompt without reaching for the wheel.
             TextInput::new("Ask devd anything. / for skills, @ for a teammate", cx)
-                .multiline(8)
+                .multiline(12)
                 .spelling(dictionary)
                 .linking()
         });

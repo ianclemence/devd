@@ -21,7 +21,7 @@ use gpui::{
     App, Bounds, ClipboardItem, Context, CursorStyle, ElementId, ElementInputHandler, Entity,
     EntityInputHandler, EventEmitter, FocusHandle, Focusable, GlobalElementId, KeyBinding,
     LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point,
-    ScrollDelta, ScrollHandle, ScrollWheelEvent, ShapedLine, SharedString, Style, TextRun, UTF16Selection, UnderlineStyle, Window,
+    ScrollHandle, ScrollWheelEvent, ShapedLine, SharedString, Style, TextRun, UTF16Selection, UnderlineStyle, Window,
     actions, div, fill, point, prelude::*, px, relative, size,
 };
 use unicode_segmentation::*;
@@ -40,6 +40,16 @@ actions!(
         SelectAll,
         Home,
         End,
+        TextStart,
+        TextEnd,
+        SelectHome,
+        SelectEnd,
+        SelectTextStart,
+        SelectTextEnd,
+        SelectUp,
+        SelectDown,
+        Undo,
+        Redo,
         ShowCharacterPalette,
         Paste,
         Cut,
@@ -92,11 +102,21 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("secondary-v", Paste, context),
         KeyBinding::new("secondary-c", Copy, context),
         KeyBinding::new("secondary-x", Cut, context),
+        // Home and End go to the ends of the line the cursor is on; with Ctrl, to the ends of the whole text. Shift
+        // selects on the way, as it does with every movement key.
         KeyBinding::new("home", Home, context),
         KeyBinding::new("end", End, context),
-        // Home and End already go to the start and end of the whole text, which is what Ctrl+Home and Ctrl+End mean.
-        KeyBinding::new("secondary-home", Home, context),
-        KeyBinding::new("secondary-end", End, context),
+        KeyBinding::new("secondary-home", TextStart, context),
+        KeyBinding::new("secondary-end", TextEnd, context),
+        KeyBinding::new("shift-home", SelectHome, context),
+        KeyBinding::new("shift-end", SelectEnd, context),
+        KeyBinding::new("secondary-shift-home", SelectTextStart, context),
+        KeyBinding::new("secondary-shift-end", SelectTextEnd, context),
+        KeyBinding::new("shift-up", SelectUp, context),
+        KeyBinding::new("shift-down", SelectDown, context),
+        KeyBinding::new("secondary-z", Undo, context),
+        KeyBinding::new("secondary-shift-z", Redo, context),
+        KeyBinding::new("secondary-y", Redo, context),
         KeyBinding::new("ctrl-left", WordLeft, context),
         KeyBinding::new("ctrl-right", WordRight, context),
         KeyBinding::new("alt-left", WordLeft, context),
@@ -150,8 +170,94 @@ pub struct TextInput {
     scroller: Option<ScrollHandle>,
     /// Where the cursor was when the view was last brought to it, so a person who scrolls away is left there.
     viewed_cursor: Option<usize>,
-    /// The first row shown, for a field with more rows than it shows: the view follows the cursor.
-    first_row: usize,
+    /// How far the text is scrolled up, in pixels, for a field with more rows than it shows. Pixels, not rows: a
+    /// wheel moves the text as far as the wheel turned, and a row can be half in view, as in any editor.
+    scroll_y: Pixels,
+    /// The height of one row as last drawn, so a click or the system's text input can find a row.
+    row_height: Pixels,
+    /// What Ctrl+Z goes back to, and what Ctrl+Y brings back.
+    history: History,
+}
+
+/// One state of the text: what it said and where the selection was.
+#[derive(Debug, Clone, PartialEq)]
+struct Snapshot {
+    content: SharedString,
+    selected: Range<usize>,
+}
+
+/// What kind of edit a change was, so typing a word is one step back and not one per letter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EditKind {
+    /// A character typed, not a space or a line break.
+    Typing,
+    /// A character deleted with Backspace or Delete.
+    Deleting,
+    /// Anything else: a paste, a cut, a space, a line, a correction. Always its own step.
+    Other,
+}
+
+/// Undo and redo for one field.
+#[derive(Debug, Default)]
+struct History {
+    undo: Vec<Snapshot>,
+    redo: Vec<Snapshot>,
+    /// The kind of the last edit and when it was made, to decide whether the next one joins its step.
+    last: Option<(EditKind, std::time::Instant)>,
+}
+
+impl History {
+    /// The most steps kept back: enough for any message, bounded for a file left open all day.
+    const DEPTH: usize = 400;
+    /// Edits of one kind closer together than this are one step.
+    const JOIN: std::time::Duration = std::time::Duration::from_millis(900);
+
+    /// Record the state before an edit of `kind`, unless it continues the step the last edit began.
+    fn before(&mut self, state: Snapshot, kind: EditKind, now: std::time::Instant) {
+        let joins = kind != EditKind::Other
+            && self
+                .last
+                .is_some_and(|(last, at)| last == kind && now.duration_since(at) < Self::JOIN);
+        if !joins {
+            self.undo.push(state);
+            if self.undo.len() > Self::DEPTH {
+                self.undo.remove(0);
+            }
+        }
+        self.redo.clear();
+        self.last = Some((kind, now));
+    }
+
+    /// Step back from `current`, if there is anywhere to go.
+    fn undo(&mut self, current: Snapshot) -> Option<Snapshot> {
+        let previous = self.undo.pop()?;
+        self.redo.push(current);
+        self.last = None;
+        Some(previous)
+    }
+
+    /// Step forward from `current`, if something was undone.
+    fn redo(&mut self, current: Snapshot) -> Option<Snapshot> {
+        let next = self.redo.pop()?;
+        self.undo.push(current);
+        self.last = None;
+        Some(next)
+    }
+
+    fn forget(&mut self) {
+        *self = Self::default();
+    }
+}
+
+/// What kind of edit putting `new_text` over `replaced` bytes is.
+fn kind_of(new_text: &str, replaced: usize) -> EditKind {
+    let mut chars = new_text.chars();
+    match (chars.next(), chars.next(), replaced) {
+        // One character's worth of bytes: Backspace or Delete. Deleting a whole selection is a step of its own.
+        (None, None, 1..=4) => EditKind::Deleting,
+        (Some(c), None, 0) if !c.is_whitespace() => EditKind::Typing,
+        _ => EditKind::Other,
+    }
 }
 
 impl TextInput {
@@ -177,7 +283,40 @@ impl TextInput {
             code: false,
             scroller: None,
             viewed_cursor: None,
-            first_row: 0,
+            scroll_y: px(0.),
+            row_height: px(0.),
+            history: History::default(),
+        }
+    }
+
+    /// The text and selection now, as a step of history.
+    fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            content: self.content.clone(),
+            selected: self.selected_range.clone(),
+        }
+    }
+
+    /// Put back a state from history.
+    fn restore(&mut self, state: Snapshot, cx: &mut Context<Self>) {
+        let len = state.content.len();
+        self.content = state.content;
+        self.selected_range = state.selected.start.min(len)..state.selected.end.min(len);
+        self.selection_reversed = false;
+        self.marked_range = None;
+        cx.emit(InputEvent::Changed);
+        cx.notify();
+    }
+
+    fn undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(previous) = self.history.undo(self.snapshot()) {
+            self.restore(previous, cx);
+        }
+    }
+
+    fn redo(&mut self, _: &Redo, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(next) = self.history.redo(self.snapshot()) {
+            self.restore(next, cx);
         }
     }
 
@@ -197,6 +336,9 @@ impl TextInput {
         self.selection_reversed = false;
         self.marked_range = None;
         self.viewed_cursor = None;
+        self.scroll_y = px(0.);
+        // A file just opened has nothing to undo back to.
+        self.history.forget();
         cx.notify();
     }
 
@@ -207,6 +349,11 @@ impl TextInput {
             .map(|l| l.chars().count())
             .max()
             .unwrap_or(0)
+    }
+
+    /// How many rows the text took when it was last drawn, wrapped lines included.
+    pub fn rows(&self) -> usize {
+        self.lines.len().max(1)
     }
 
     /// How many lines the text has.
@@ -269,7 +416,16 @@ impl TextInput {
 
     /// Replace the text and put the cursor at its end.
     pub fn set_text(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
-        self.content = text.into();
+        let text = text.into();
+        // Emptied after a message is sent, the box starts again; any other text set from outside (a recalled prompt,
+        // a skill picked from the menu) can be undone back to what was typed.
+        if text.is_empty() {
+            self.history.forget();
+            self.scroll_y = px(0.);
+        } else if text != self.content {
+            self.history.before(self.snapshot(), EditKind::Other, std::time::Instant::now());
+        }
+        self.content = text;
         let end = self.content.len();
         self.selected_range = end..end;
         self.selection_reversed = false;
@@ -326,6 +482,7 @@ impl TextInput {
             .collect::<Vec<_>>()
             .join("\n");
         let added = indented.len() - block.len();
+        self.history.before(self.snapshot(), EditKind::Other, std::time::Instant::now());
         let mut next = String::with_capacity(self.content.len() + added);
         next.push_str(&self.content[..start]);
         next.push_str(&indented);
@@ -360,6 +517,7 @@ impl TextInput {
         if removed == 0 {
             return;
         }
+        self.history.before(self.snapshot(), EditKind::Other, std::time::Instant::now());
         let mut next = String::with_capacity(self.content.len());
         next.push_str(&self.content[..start]);
         next.push_str(&outdented);
@@ -398,10 +556,17 @@ impl TextInput {
     /// Move to the same place on the line above or below, or to the ends of the
     /// text when there is no such line.
     fn vertical(&mut self, up: bool, cx: &mut Context<Self>) {
+        let target = self.vertical_target(up);
+        self.move_to(target, cx);
+    }
+
+    /// The offset at the same place on the row above or below the cursor, or the end of the text in that direction
+    /// when there is no such row.
+    fn vertical_target(&self, up: bool) -> usize {
         let cursor = self.cursor_offset();
-        let at = self.lines.iter().rposition(|(start, _)| *start <= cursor);
-        let Some(at) = at else {
-            return self.move_to(if up { 0 } else { self.content.len() }, cx);
+        let end = if up { 0 } else { self.content.len() };
+        let Some(at) = self.lines.iter().rposition(|(start, _)| *start <= cursor) else {
+            return end;
         };
         let x = self.lines[at].1.x_for_index(cursor - self.lines[at].0);
         let target = if up {
@@ -412,11 +577,35 @@ impl TextInput {
         match target {
             Some(n) => {
                 let (start, line) = &self.lines[n];
-                let offset = start + line.closest_index_for_x(x);
-                self.move_to(offset, cx);
+                start + line.closest_index_for_x(x)
             }
-            None => self.move_to(if up { 0 } else { self.content.len() }, cx),
+            None => end,
         }
+    }
+
+    fn select_up(&mut self, _: &SelectUp, _: &mut Window, cx: &mut Context<Self>) {
+        let target = self.vertical_target(true);
+        self.select_to(target, cx);
+    }
+
+    fn select_down(&mut self, _: &SelectDown, _: &mut Window, cx: &mut Context<Self>) {
+        let target = self.vertical_target(false);
+        self.select_to(target, cx);
+    }
+
+    /// Where the line holding `offset` starts: after the last line break before it.
+    fn line_start(&self, offset: usize) -> usize {
+        self.content[..offset.min(self.content.len())]
+            .rfind('\n')
+            .map_or(0, |i| i + 1)
+    }
+
+    /// Where the line holding `offset` ends: at the next line break, or the end of the text.
+    fn line_end(&self, offset: usize) -> usize {
+        let offset = offset.min(self.content.len());
+        self.content[offset..]
+            .find('\n')
+            .map_or(self.content.len(), |i| offset + i)
     }
 
     fn up(&mut self, _: &Up, _: &mut Window, cx: &mut Context<Self>) {
@@ -524,11 +713,44 @@ impl TextInput {
     }
 
     fn home(&mut self, _: &Home, _: &mut Window, cx: &mut Context<Self>) {
-        self.move_to(0, cx);
+        self.move_to(self.line_start(self.cursor_offset()), cx);
     }
 
     fn end(&mut self, _: &End, _: &mut Window, cx: &mut Context<Self>) {
+        self.move_to(self.line_end(self.cursor_offset()), cx);
+    }
+
+    fn text_start(&mut self, _: &TextStart, _: &mut Window, cx: &mut Context<Self>) {
+        self.move_to(0, cx);
+    }
+
+    fn text_end(&mut self, _: &TextEnd, _: &mut Window, cx: &mut Context<Self>) {
         self.move_to(self.content.len(), cx);
+    }
+
+    fn select_home(&mut self, _: &SelectHome, _: &mut Window, cx: &mut Context<Self>) {
+        self.select_to(self.line_start(self.cursor_offset()), cx);
+    }
+
+    fn select_end(&mut self, _: &SelectEnd, _: &mut Window, cx: &mut Context<Self>) {
+        self.select_to(self.line_end(self.cursor_offset()), cx);
+    }
+
+    fn select_text_start(&mut self, _: &SelectTextStart, _: &mut Window, cx: &mut Context<Self>) {
+        self.select_to(0, cx);
+    }
+
+    fn select_text_end(&mut self, _: &SelectTextEnd, _: &mut Window, cx: &mut Context<Self>) {
+        self.select_to(self.content.len(), cx);
+    }
+
+    /// The word around `offset`, for a double-click: the word it touches, or the offset itself between words.
+    fn word_at(&self, offset: usize) -> Range<usize> {
+        self.content
+            .unicode_word_indices()
+            .map(|(at, word)| at..at + word.len())
+            .find(|word| word.start <= offset && offset <= word.end)
+            .unwrap_or(offset..offset)
     }
 
     fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
@@ -563,12 +785,29 @@ impl TextInput {
                 return;
             }
         }
+        let at = self.index_for_mouse_position(event.position);
+        // Two clicks take the word, three the line: what every editor does, and what a person reaches for to replace
+        // a word in a message.
+        match event.click_count {
+            2 => {
+                let word = self.word_at(at);
+                self.selection_reversed = false;
+                self.selected_range = word;
+                return cx.notify();
+            }
+            n if n >= 3 => {
+                self.selection_reversed = false;
+                self.selected_range = self.line_start(at)..self.line_end(at);
+                return cx.notify();
+            }
+            _ => {}
+        }
         self.is_selecting = true;
 
         if event.modifiers.shift {
-            self.select_to(self.index_for_mouse_position(event.position), cx);
+            self.select_to(at, cx);
         } else {
-            self.move_to(self.index_for_mouse_position(event.position), cx)
+            self.move_to(at, cx)
         }
     }
 
@@ -645,10 +884,20 @@ impl TextInput {
         if position.y > bounds.bottom() {
             return self.content.len();
         }
-        let height = window_line_height_hint(*bounds, self.lines.len(), self.first_row, self.multiline);
-        let at = (self.first_row + ((position.y - bounds.top()) / height) as usize).min(self.lines.len() - 1);
+        let at = self.row_at(position.y - bounds.top());
         let (start, line) = &self.lines[at];
         start + line.closest_index_for_x(position.x - bounds.left())
+    }
+
+    /// The row under a point `y` pixels below the top of the field, with the scroll counted in.
+    fn row_at(&self, y: Pixels) -> usize {
+        let height = if self.row_height > px(0.) {
+            self.row_height
+        } else {
+            px(20.)
+        };
+        let row = ((y + self.scroll_y) / height).max(0.) as usize;
+        row.min(self.lines.len().saturating_sub(1))
     }
 
     fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
@@ -770,6 +1019,11 @@ impl EntityInputHandler for TextInput {
             .or(self.marked_range.clone())
             .unwrap_or(self.selected_range.clone());
 
+        // Composition (an IME) is recorded once, when it is committed here, not at every intermediate mark.
+        let replaced = range.end.saturating_sub(range.start);
+        if !(new_text.is_empty() && replaced == 0) {
+            self.history.before(self.snapshot(), kind_of(new_text, replaced), std::time::Instant::now());
+        }
         let (content, caret) = insert(&self.content, range, new_text);
         self.content = content.into();
         self.selected_range = caret;
@@ -822,8 +1076,13 @@ impl EntityInputHandler for TextInput {
             .iter()
             .rposition(|(start, _)| *start <= range.start)?;
         let (start, line) = &self.lines[at];
-        let height = (bounds.bottom() - bounds.top()) / self.lines.len() as f32;
-        let top = bounds.top() + height * at as f32;
+        // Where the system draws its composition window: on the row, as it is scrolled.
+        let height = if self.row_height > px(0.) {
+            self.row_height
+        } else {
+            (bounds.bottom() - bounds.top()) / self.lines.len() as f32
+        };
+        let top = bounds.top() + height * at as f32 - self.scroll_y;
         Some(Bounds::from_corners(
             point(bounds.left() + line.x_for_index(range.start - start), top),
             point(
@@ -851,8 +1110,7 @@ impl EntityInputHandler for TextInput {
         if self.lines.is_empty() {
             return None;
         }
-        let height = (bounds.bottom() - bounds.top()) / self.lines.len() as f32;
-        let at = ((line_point.y / height) as usize).min(self.lines.len() - 1);
+        let at = self.row_at(line_point.y);
         let (start, line) = &self.lines[at];
         let utf8_index = start + line.index_for_x(point.x - bounds.left())?;
         Some(self.offset_to_utf16(utf8_index))
@@ -867,25 +1125,35 @@ struct PrepaintState {
     lines: Vec<(usize, ShapedLine)>,
     cursor: Option<PaintQuad>,
     selection: Vec<PaintQuad>,
-    first_row: usize,
-    visible: usize,
+    /// How far the text is scrolled up, as it is drawn this frame.
+    scroll: Pixels,
+    /// The scrollbar's thumb, when the text is taller than the field: its top and height within the field.
+    thumb: Option<(Pixels, Pixels)>,
 }
 
-/// The first row to show so the row `at` is inside a window of `visible` rows that started at `first_row`.
-fn follow(first_row: usize, at: usize, visible: usize) -> usize {
-    if at < first_row {
-        at
-    } else if at >= first_row + visible {
-        at + 1 - visible
+/// How far to scroll so a row `caret` pixels from the top of the text, `row` tall, is inside a view `view` tall
+/// that is scrolled by `scroll`. It moves only as far as it must.
+fn follow(scroll: Pixels, caret: Pixels, row: Pixels, view: Pixels) -> Pixels {
+    if caret < scroll {
+        caret
+    } else if caret + row > scroll + view {
+        caret + row - view
     } else {
-        first_row
+        scroll
     }
 }
 
-/// The height of one row, from the field's bounds and the rows it shows.
-fn window_line_height_hint(bounds: Bounds<Pixels>, rows: usize, _first: usize, most: Option<usize>) -> Pixels {
-    let shown = rows.clamp(1, most.unwrap_or(1).max(1));
-    (bounds.bottom() - bounds.top()) / shown as f32
+/// The scrollbar's thumb for text `total` tall seen through a view `view` tall at `scroll`: its top and height. Never
+/// shorter than a finger's worth, so it can be seen on a very long message.
+fn thumb(total: Pixels, view: Pixels, scroll: Pixels) -> Option<(Pixels, Pixels)> {
+    if total <= view + px(0.5) || view <= px(0.) {
+        return None;
+    }
+    let height = (view * (view / total)).max(px(18.)).min(view);
+    let travel = view - height;
+    let reach = total - view;
+    let top = if reach > px(0.) { travel * (scroll / reach) } else { px(0.) };
+    Some((top, height))
 }
 
 /// Where a line of text breaks so no row is wider than `width`: after the last space that fits, or inside a word
@@ -1144,22 +1412,31 @@ impl Element for TextElement {
         // the next row, and before a newline it is at the end of its own.
         let line_of = |offset: usize| -> usize { lines.iter().rposition(|(s, _)| *s <= offset).unwrap_or(0) };
         let at = line_of(cursor);
-        // The rows this field shows, when the text has more: the view follows the cursor.
-        let visible = input.multiline.map_or(1, |most| lines.len().clamp(1, most));
-        let mut first_row = input.first_row.min(lines.len().saturating_sub(visible));
-        // Only a cursor that has moved since the last paint brings the view to it. A wheel that scrolled away from a
-        // cursor standing still is left where it scrolled to; the next keystroke brings the view back.
-        let cursor_moved = input.viewed_cursor != Some(cursor);
-        if cursor_moved {
-            first_row = follow(first_row, at, visible);
+        // The text is scrolled in pixels inside the rows the field shows. Only a cursor that has moved since the last
+        // paint brings the view to it: a wheel that scrolled away from a cursor standing still is left where it
+        // scrolled to, and the next keystroke brings the view back.
+        let view = bounds.size.height;
+        let total = line_height * lines.len() as f32;
+        let reach = (total - view).max(px(0.));
+        let mut scroll = input.scroll_y.clamp(px(0.), reach);
+        if input.viewed_cursor != Some(cursor) {
+            scroll = follow(scroll, line_height * at as f32, line_height, view).clamp(px(0.), reach);
         }
+        let shows_bar = input.multiline.is_some() && !input.code;
+        let thumb = if shows_bar { thumb(total, view, scroll) } else { None };
+        // The rows any part of which is in view: the only ones drawn or selected.
+        let first_row = (scroll / line_height).max(0.) as usize;
+        let last_row = (((scroll + view) / line_height).ceil() as usize)
+            .saturating_sub(1)
+            .min(lines.len().saturating_sub(1));
+        let row_top = |n: usize| bounds.top() + line_height * n as f32 - scroll;
         let x_of = |index: usize, lines: &[(usize, ShapedLine)], at: usize| {
             lines[at]
                 .1
                 .x_for_index(index.saturating_sub(lines[at].0).min(lines[at].1.len()))
         };
         let (selection, cursor) = if selected_range.is_empty() {
-            let top = bounds.top() + line_height * (at - first_row) as f32;
+            let top = row_top(at);
             (
                 Vec::new(),
                 Some(fill(
@@ -1172,7 +1449,7 @@ impl Element for TextElement {
             )
         } else {
             let (first, last) = (line_of(selected_range.start), line_of(selected_range.end));
-            let quads = (first.max(first_row)..=last.min(first_row + visible - 1))
+            let quads = (first.max(first_row)..=last.min(last_row))
                 .map(|n| {
                     let (line_start, line) = &lines[n];
                     let from = if n == first {
@@ -1186,7 +1463,7 @@ impl Element for TextElement {
                     } else {
                         (line.len(), px(6.))
                     };
-                    let top = bounds.top() + line_height * (n - first_row) as f32;
+                    let top = row_top(n);
                     fill(
                         Bounds::from_corners(
                             point(bounds.left() + line.x_for_index(from), top),
@@ -1205,8 +1482,8 @@ impl Element for TextElement {
             lines,
             cursor,
             selection,
-            first_row,
-            visible,
+            scroll,
+            thumb,
         }
     }
 
@@ -1226,15 +1503,37 @@ impl Element for TextElement {
             ElementInputHandler::new(bounds, self.input.clone()),
             cx,
         );
-        for quad in prepaint.selection.drain(..) {
-            window.paint_quad(quad)
-        }
         let line_height = window.line_height();
         let lines = std::mem::take(&mut prepaint.lines);
-        let (first_row, visible) = (prepaint.first_row, prepaint.visible);
-        for (n, (_, line)) in lines.iter().enumerate().skip(first_row).take(visible) {
-            let origin = point(bounds.origin.x, bounds.origin.y + line_height * (n - first_row) as f32);
-            line.paint(origin, line_height, window, cx).unwrap();
+        let scroll = prepaint.scroll;
+        let selection = std::mem::take(&mut prepaint.selection);
+        // Everything is drawn inside the field: a row half scrolled out is cut at the field's edge, not drawn over
+        // what is above or below it.
+        let mask = gpui::ContentMask { bounds };
+        window.with_content_mask(Some(mask), |window| {
+            for quad in selection {
+                window.paint_quad(quad)
+            }
+            let first = (scroll / line_height).max(0.) as usize;
+            let rows = ((bounds.size.height / line_height).ceil() as usize) + 1;
+            for (n, (_, line)) in lines.iter().enumerate().skip(first).take(rows) {
+                let origin = point(bounds.origin.x, bounds.origin.y + line_height * n as f32 - scroll);
+                let _ = line.paint(origin, line_height, window, cx);
+            }
+        });
+        // A thin bar at the right edge says there is more above or below, and how much.
+        if let Some((top, height)) = prepaint.thumb {
+            let t = theme(cx);
+            window.paint_quad(
+                fill(
+                    Bounds::new(
+                        point(bounds.right() - px(3.), bounds.top() + top),
+                        size(px(3.), height),
+                    ),
+                    t.faint.opacity(0.55),
+                )
+                .corner_radii(px(1.5)),
+            );
         }
 
         // A code field scrolls with its parent; when the cursor has moved, the view moves to it.
@@ -1272,7 +1571,9 @@ impl Element for TextElement {
         if focus_handle.is_focused(window)
             && let Some(cursor) = prepaint.cursor.take()
         {
-            window.paint_quad(cursor);
+            window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
+                window.paint_quad(cursor)
+            });
         }
 
         // The height was asked for at the width the text was last drawn at. If the width has changed, the rows it
@@ -1284,7 +1585,8 @@ impl Element for TextElement {
             input.lines = lines;
             input.last_bounds = Some(bounds);
             input.viewed_cursor = Some(here);
-            input.first_row = first_row;
+            input.scroll_y = scroll;
+            input.row_height = line_height;
         });
         if moved || wrong_height {
             window.refresh();
@@ -1319,6 +1621,16 @@ impl Render for TextInput {
             .on_action(cx.listener(Self::select_all))
             .on_action(cx.listener(Self::home))
             .on_action(cx.listener(Self::end))
+            .on_action(cx.listener(Self::text_start))
+            .on_action(cx.listener(Self::text_end))
+            .on_action(cx.listener(Self::select_home))
+            .on_action(cx.listener(Self::select_end))
+            .on_action(cx.listener(Self::select_text_start))
+            .on_action(cx.listener(Self::select_text_end))
+            .on_action(cx.listener(Self::select_up))
+            .on_action(cx.listener(Self::select_down))
+            .on_action(cx.listener(Self::undo))
+            .on_action(cx.listener(Self::redo))
             .on_action(cx.listener(Self::word_left))
             .on_action(cx.listener(Self::word_right))
             .on_action(cx.listener(Self::delete_word_left))
@@ -1349,17 +1661,16 @@ impl Render for TextInput {
                     return;
                 }
                 let line_height = window.line_height();
-                let rows = match ev.delta {
-                    ScrollDelta::Lines(point) => -point.y.round() as isize,
-                    ScrollDelta::Pixels(point) => -(point.y / line_height).round() as isize,
-                };
-                if rows == 0 {
-                    return;
-                }
-                let last = this.lines.len() - visible;
-                let next = (this.first_row as isize + rows).clamp(0, last as isize) as usize;
-                if next != this.first_row {
-                    this.first_row = next;
+                // As far as the wheel turned: the system's own lines per notch (gpui has already multiplied by the
+                // Windows "lines to scroll" setting, three by default, as Notepad and VS Code use), a touchpad's
+                // movement in its own pixels. The text follows the hand instead of jumping a whole row at a time.
+                let dy = ev.delta.pixel_delta(line_height).y;
+                let reach = line_height * (this.lines.len() - visible) as f32;
+                let next = (this.scroll_y - dy).clamp(px(0.), reach);
+                // Within the box, the box scrolls; at its ends the turn is not taken from the page around it.
+                if next != this.scroll_y {
+                    this.scroll_y = next;
+                    cx.stop_propagation();
                     cx.notify();
                 }
             }))
@@ -1407,12 +1718,59 @@ mod tests {
 
     #[test]
     fn the_view_moves_only_as_far_as_the_cursor_needs() {
+        let (row, view) = (px(20.), px(160.));
         // Already in view: nothing moves.
-        assert_eq!(follow(10, 12, 8), 10);
-        // Above the window: it becomes the top row.
-        assert_eq!(follow(10, 3, 8), 3);
-        // Below the window: it becomes the bottom row.
-        assert_eq!(follow(10, 30, 8), 23);
+        assert_eq!(follow(px(200.), px(240.), row, view), px(200.));
+        // Above the view: its row becomes the top.
+        assert_eq!(follow(px(200.), px(60.), row, view), px(60.));
+        // Below the view: its row becomes the bottom.
+        assert_eq!(follow(px(200.), px(600.), row, view), px(460.));
+    }
+
+    #[test]
+    fn the_scrollbar_says_where_the_view_is_and_how_much_there_is() {
+        // Everything fits: no bar.
+        assert_eq!(thumb(px(100.), px(160.), px(0.)), None);
+        // Four times the view: a quarter-height thumb, at the top, then at the bottom.
+        assert_eq!(thumb(px(640.), px(160.), px(0.)), Some((px(0.), px(40.))));
+        assert_eq!(thumb(px(640.), px(160.), px(480.)), Some((px(120.), px(40.))));
+        // A very long message still has a thumb a finger can find.
+        assert_eq!(thumb(px(100_000.), px(160.), px(0.)).map(|t| t.1), Some(px(18.)));
+    }
+
+    #[test]
+    fn typing_a_word_is_one_step_back_and_a_paste_is_its_own() {
+        let at = std::time::Instant::now();
+        let soon = at + std::time::Duration::from_millis(100);
+        let state = |text: &str| Snapshot { content: text.to_string().into(), selected: text.len()..text.len() };
+        let mut history = History::default();
+        history.before(state(""), kind_of("h", 0), at);
+        history.before(state("h"), kind_of("i", 0), soon);
+        assert_eq!(history.undo.len(), 1, "two letters typed together are one step");
+        history.before(state("hi"), kind_of(" ", 0), soon);
+        history.before(state("hi "), kind_of("pasted text", 0), soon);
+        assert_eq!(history.undo.len(), 3, "a space and a paste each start a step");
+        let back = history.undo(state("hi pasted text")).unwrap();
+        assert_eq!(back.content.as_ref(), "hi ");
+        let forward = history.redo(back).unwrap();
+        assert_eq!(forward.content.as_ref(), "hi pasted text");
+        // A new edit after an undo cannot be redone over.
+        history.undo(forward);
+        history.before(state("hi "), kind_of("x", 0), soon);
+        assert!(history.redo.is_empty());
+    }
+
+    #[test]
+    fn a_letter_waits_its_turn_after_a_pause() {
+        let at = std::time::Instant::now();
+        let later = at + std::time::Duration::from_secs(2);
+        let state = Snapshot { content: "".into(), selected: 0..0 };
+        let mut history = History::default();
+        history.before(state.clone(), EditKind::Typing, at);
+        history.before(state, EditKind::Typing, later);
+        assert_eq!(history.undo.len(), 2, "typing after a pause is a new step");
+        assert_eq!(kind_of("", 1), EditKind::Deleting);
+        assert_eq!(kind_of("", 400), EditKind::Other, "deleting a selection is its own step");
     }
 
     #[test]

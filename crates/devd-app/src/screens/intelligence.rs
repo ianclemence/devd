@@ -635,7 +635,7 @@ fn model_performance(rows: &[Scorecard], cx: &App) -> Div {
                 row.errors
             )
         } else {
-            format!("{} tokens · {} tasks", ui::compact(row.tokens), row.tasks)
+            format!("{} tokens · {}", ui::compact(row.tokens), ui::counted(row.tasks as u64, "task"))
         };
         if row.tasks > 0 {
             if let Some(score) = row.score {
@@ -791,7 +791,7 @@ fn agent_performance(rows: &[Scorecard], cx: &App) -> Div {
             .rank
             .map(|n| format!("#{n}"))
             .unwrap_or_else(|| "—".to_string());
-        let mut sub = format!("{} tasks", row.tasks);
+        let mut sub = ui::counted(row.tasks as u64, "task");
         if let Some(score) = row.score {
             sub.push_str(&format!(" · score {score:.0}"));
         }

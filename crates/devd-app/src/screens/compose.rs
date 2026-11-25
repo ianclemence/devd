@@ -100,6 +100,10 @@ pub struct Compose {
     pub dismissed: Option<(Open, std::time::Instant)>,
     /// What scrolls the `/` and `@` menu, so every match can be reached and the highlighted one stays in view.
     pub list_scroll: gpui::ScrollHandle,
+    /// The buttons have moved under the text. Once a message needs a second row it keeps the stacked layout until
+    /// the box is emptied: the two layouts give the text different widths, and switching back and forth at the
+    /// point where it just fits would make the box flicker as you type.
+    pub stacked: std::cell::Cell<bool>,
 }
 
 impl Compose {
@@ -799,34 +803,22 @@ pub fn view(
     if !compose.files.is_empty() {
         boxed = boxed.child(div().px(px(4.0)).child(files));
     }
-    // One row: attach, the text, send. A long message grows the row upward-anchored,
-    // so the buttons stay beside its last line.
-    boxed = boxed.child(
-        div()
-            .flex()
-            .items_end()
-            .gap(px(8.0))
-            .child(
-                Button::icon_only("compose.plus", "plus").on_click(cx.listener(
-                    |this, _: &ClickEvent, _, cx| {
-                        this.compose.toggle(Open::Plus);
-                        cx.notify();
-                    },
-                )),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .py(px(3.0))
-                    .child(shell.composer.clone()),
-            )
-            // Next to send: hand this message to the team instead. A project-shaped request used to
-            // become a single agent's conversation with no plan, no worktree and no verdict, because
-            // the only way to start a run was to know the phrase "have the team ..." - this is the
-            // one visible way to choose it. The plan still comes back for approval before any work.
-            .child(
-                Button::new("composer.team", "Team")
+    let plus = Button::icon_only("compose.plus", "plus").on_click(cx.listener(
+        |this, _: &ClickEvent, _, cx| {
+            this.compose.toggle(Open::Plus);
+            cx.notify();
+        },
+    ));
+    let field = div()
+        .flex_1()
+        .min_w_0()
+        .py(px(3.0))
+        .child(shell.composer.clone());
+    // Next to send: hand this message to the team instead. A project-shaped request used to
+    // become a single agent's conversation with no plan, no worktree and no verdict, because
+    // the only way to start a run was to know the phrase "have the team ..." - this is the
+    // one visible way to choose it. The plan still comes back for approval before any work.
+    let team = Button::new("composer.team", "Team")
                     .disabled(!sendable)
                     .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                         let goal = this.composer.read(cx).text().trim().to_string();
@@ -845,17 +837,42 @@ pub fn view(
                             window,
                             cx,
                         );
-                    })),
-            )
-            .child(
-                Button::icon_only("composer.send", "arrow-up")
-                    .kind(ButtonKind::Primary)
-                    .disabled(!sendable)
-                    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                        this.submit_composer(window, cx)
-                    })),
-            ),
-    );
+                    }));
+    let send = Button::icon_only("composer.send", "arrow-up")
+        .kind(ButtonKind::Primary)
+        .disabled(!sendable)
+        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+            this.submit_composer(window, cx)
+        }));
+    // A one-line message is one row: attach, the text, send. Once it runs to a second row the text takes the
+    // box's whole width and the buttons sit in a row of their own under it, as in every editor people write long
+    // prompts in: beside the text, they took a column out of every line of a long message.
+    let stacked = !text.is_empty()
+        && (compose.stacked.get() || text.contains('\n') || shell.composer.read(cx).rows() > 1);
+    compose.stacked.set(stacked);
+    if stacked {
+        boxed = boxed.child(field).child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.0))
+                .child(plus)
+                .child(div().flex_1())
+                .child(team)
+                .child(send),
+        );
+    } else {
+        boxed = boxed.child(
+            div()
+                .flex()
+                .items_end()
+                .gap(px(8.0))
+                .child(plus)
+                .child(field)
+                .child(team)
+                .child(send),
+        );
+    }
     root = root.child(boxed);
 
     // Under the box: the model, the effort and the mode the next message goes out with.

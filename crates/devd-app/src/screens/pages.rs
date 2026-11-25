@@ -43,6 +43,9 @@ pub struct Act {
     pub args: Value,
     /// Whether a confirmation comes first, and what it says.
     pub ask: Option<Ask>,
+    /// Confirmed first but takes nothing away (connecting a program, keeping a lesson): drawn as an ordinary action,
+    /// not in the colour of removing something. A green light asked for is not a red one.
+    pub safe: bool,
     /// What to say while it runs, when it can take long enough to notice.
     pub busy: Option<String>,
 }
@@ -68,7 +71,14 @@ impl Act {
             args,
             ask: None,
             busy: None,
+            safe: false,
         }
+    }
+
+    /// Mark a confirmed act as one that removes nothing, so it is not drawn as destructive.
+    pub fn safe(mut self) -> Self {
+        self.safe = true;
+        self
     }
 
     /// Say what it is doing while it runs.
@@ -291,8 +301,10 @@ fn rows_card(rows: Vec<Row>, key: &'static str, cx: &mut Context<Shell>) -> Div 
         for (a, act) in row.acts.into_iter().enumerate() {
             let id = ElementId::NamedInteger(format!("{key}.{n}.act").into(), a as u64);
             // Removing something is said in the colour of removing it, even before the pointer finds it.
-            let kind = if act.ask.is_some() {
+            let kind = if act.ask.is_some() && !act.safe {
                 ButtonKind::Danger
+            } else if act.safe {
+                ButtonKind::Secondary
             } else {
                 ButtonKind::Ghost
             };
@@ -1969,7 +1981,8 @@ fn notes(cx: &mut Context<Shell>) -> AnyElement {
                         "Keep what this run taught?",
                         "The memory lines go into the project's memory and the proposed skill is installed. Every later run then knows both. You can still edit or archive the skill.",
                         "Keep it",
-                    ),
+                    )
+                    .safe(),
                     Act::new("Drop", "review.drop", json!({ "run": run })).ask(
                         "Drop this review?",
                         "Nothing is written: the memory and skills it mentioned are untouched.",
@@ -3101,7 +3114,7 @@ fn connect(cx: &mut Context<Shell>) -> AnyElement {
             } else if added {
                 ((Tone::Warn, "points at an old devd".to_string()), vec![Act::new("Reconnect", "agent_client.add", json!({ "client": id })).ask(format!("Reconnect {name} to devd?"), format!("devd updates only its own entry in {name}'s configuration and keeps a copy of the old file. Restart {name} to pick up the change."), "Reconnect")])
             } else if found {
-                ((Tone::Neutral, "not connected".to_string()), vec![Act::new("Connect", "agent_client.add", json!({ "client": id })).ask(format!("Let {name} use devd?"), format!("devd adds one entry to {name}'s configuration and keeps a copy of the old file. Everything else is untouched. Restart {name} to pick up the change."), "Connect")])
+                ((Tone::Neutral, "not connected".to_string()), vec![Act::new("Connect", "agent_client.add", json!({ "client": id })).ask(format!("Let {name} use devd?"), format!("devd adds one entry to {name}'s configuration and keeps a copy of the old file. Everything else is untouched. Restart {name} to pick up the change."), "Connect").safe()])
             } else {
                 ((Tone::Neutral, "not installed".to_string()), vec![])
             };
