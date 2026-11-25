@@ -576,6 +576,12 @@ impl Shell {
                 if let Some(theme) = other.strip_prefix("view.theme.") {
                     self.choose_theme(theme, cx);
                 } else if let Some(route) = other.strip_prefix("go.").and_then(Route::parse) {
+                    // The Assistant is where your conversation is: going back to it returns to the one you were in,
+                    // not to an empty start screen. A new conversation is its own command.
+                    let route = match route {
+                        Route::Assistant(None) => Route::Assistant(self.history.last_conversation()),
+                        other => other,
+                    };
                     self.history.go(route);
                 }
             }
@@ -1075,13 +1081,24 @@ impl Shell {
             .flex()
             .items_center()
             .gap(px(7.0))
-            .text_size(px(size::TEXT))
-            .child(
+            .text_size(px(size::TEXT));
+        // A page that is one tab of an area says the area first, "Team › Schedules", as the area's own tab does: on
+        // its own, "Schedules" did not say where in the window you were.
+        if let Route::Page(id) = &route
+            && let Some(page) = devd_app_core::pages::find(id)
+        {
+            crumbs = crumbs
+                .child(div().font_weight(FontWeight::MEDIUM).text_color(t.text).child(page.area.home().title()))
+                .child(icon("chevron-right", 11.0, t.faint))
+                .child(div().text_color(t.muted).child(page.title));
+        } else {
+            crumbs = crumbs.child(
                 div()
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(t.text)
                     .child(route.title()),
             );
+        }
         if let Some(selection) = route.selection() {
             crumbs = crumbs.child(icon("chevron-right", 11.0, t.faint)).child(
                 div()
