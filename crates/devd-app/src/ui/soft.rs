@@ -54,20 +54,32 @@ fn distance(px: f32, py: f32, at: (f32, f32)) -> f32 {
     ((px - at.0).powi(2) + (py - at.1).powi(2)).sqrt()
 }
 
-/// Rings spreading from the upper right over a soft light. Sling.
+/// A field of fine lines rolling like water seen from a height, their crests catching the light. Sling.
 fn ripples(px: f32, py: f32, base: [u8; 3], glint: [u8; 3], seed: u32) -> Paint {
     let mut paint = Paint::default();
-    let centre = (0.90 * ASPECT, 0.10);
-    // A very slow bend, so the rings are water and not a target.
-    let r = distance(px, py, centre) + (fbm(px * 1.3, py * 1.3, 11 + seed) - 0.5) * 0.07;
-    let fade = gauss(r / 0.95);
-    paint.over(mix(base, glint, 0.9), gauss(r / 0.34) * 0.55);
-    let spacing = 0.074;
-    let step = r / spacing;
-    let from_ring = (step - step.round()).abs() * spacing * HEIGHT as f32;
-    let strong = (step.round() as i32).rem_euclid(4) == 0;
-    let (tone, half, much) = if strong { (1.0, 0.9, 0.95) } else { (0.2, 0.45, 0.55) };
-    paint.over(mix(base, glint, tone), line(from_ring, half) * fade * much);
+    let across = px / ASPECT;
+    paint.over(mix(base, glint, 0.95), gauss(distance(px, py, (0.94 * ASPECT, 0.02)) / 0.46) * 0.30);
+    // The field rises out of nothing on the left, where text is read.
+    let reach = smooth((across - 0.16) / 0.66);
+    if reach <= 0.0 || py < 0.30 {
+        return paint;
+    }
+    const LINES: u32 = 30;
+    let start = seed as f32 * 1.7;
+    for k in 0..LINES {
+        let t = k as f32 / (LINES - 1) as f32;
+        let (swell, ripple) = (0.15 * (1.0 - 0.35 * t), 0.045);
+        let (a, b) = (px * 2.1 + t * 2.6 + 0.9 + start, px * 5.3 - t * 4.2 + start);
+        let height = 0.56 + 0.50 * t + swell * a.sin() + ripple * b.sin();
+        // The distance to the line is measured square to it, so a steep part is as thin as a flat one.
+        let slope = swell * 2.1 * a.cos() + ripple * 5.3 * b.cos();
+        let from = (py - height).abs() / (1.0 + slope * slope).sqrt() * HEIGHT as f32;
+        if from > 2.0 {
+            continue;
+        }
+        let crest = (0.5 - 0.5 * a.sin()).powf(1.6);
+        paint.over(mix(base, glint, 0.30 + 0.70 * crest), line(from, 0.55) * reach * (0.55 + 0.45 * crest) * (0.65 + 0.35 * t));
+    }
     paint
 }
 
@@ -252,6 +264,43 @@ mod tests {
             }
         }
         sum / 1600.0
+    }
+
+    /// Every built-in theme's scene over its own background, written to `DEVD_SCENES` to be looked at.
+    #[test]
+    #[ignore = "writes pictures for a person to look at"]
+    fn write_the_themes_for_looking_at() {
+        let Ok(dir) = std::env::var("DEVD_SCENES") else {
+            return;
+        };
+        for id in crate::theme::Theme::ORDER {
+            let theme = crate::theme::Theme::by_id(id);
+            let bg = gpui::Rgba::from(theme.bg);
+            let ground = [bg.r, bg.g, bg.b].map(|c| c * 255.0);
+            let mut rows = Vec::new();
+            for y in 0..HEIGHT {
+                rows.push(0);
+                for x in 0..WIDTH {
+                    let (u, v) = ((x as f32 + 0.5) / WIDTH as f32, (y as f32 + 0.5) / HEIGHT as f32);
+                    // A scene that stands on the bottom is drawn as it is; the window never flips a built-in.
+                    let (colour, alpha) = pixel(theme.pattern, u, v, theme.art_rgb(), theme.art_glint_rgb(), 0);
+                    let a = alpha / 255.0 * theme.art_strength;
+                    for (under, over) in ground.iter().zip(colour) {
+                        rows.push((under * (1.0 - a) + over * a) as u8);
+                    }
+                    rows.push(255);
+                }
+            }
+            let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+            let mut header = Vec::new();
+            header.extend_from_slice(&WIDTH.to_be_bytes());
+            header.extend_from_slice(&HEIGHT.to_be_bytes());
+            header.extend_from_slice(&[8, 6, 0, 0, 0]);
+            chunk(&mut out, b"IHDR", &header);
+            chunk(&mut out, b"IDAT", &zlib_stored(&rows));
+            chunk(&mut out, b"IEND", &[]);
+            std::fs::write(format!("{dir}/{id}.png"), out).unwrap();
+        }
     }
 
     #[test]

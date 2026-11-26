@@ -7,7 +7,7 @@
 /// The scene a theme draws behind its screens.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pattern {
-    /// Rings spreading from the top-right corner. Sling.
+    /// Fine lines rolling like water, lit on their crests. Sling.
     Ripples,
     /// A low sun over layered hills. Dawn.
     Pasture,
@@ -53,7 +53,7 @@ impl Pattern {
     /// How strongly the picture shows, as an opacity. The scenes differ in how much ink they carry.
     pub fn strength(self, dark: bool) -> f32 {
         let base = match self {
-            Pattern::Ripples => 0.34,
+            Pattern::Ripples => 0.55,
             Pattern::Pasture => 0.42,
             Pattern::Silk => 0.42,
             Pattern::Contours => 0.34,
