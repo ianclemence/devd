@@ -10,6 +10,16 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.42.1] - 2026-11-26 - Clearer records
+
+### Fixed
+
+- A failed service action in Activity names the service.
+- The update check the window makes on its own is no longer recorded as something you did.
+- A server check that mentions a folder keeps the start of its sentence.
+
+---
+
 ## [0.42.0] - 2026-11-26 - New backgrounds, a quieter chat
 
 ### Added
