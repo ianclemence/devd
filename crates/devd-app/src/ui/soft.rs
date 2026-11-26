@@ -78,8 +78,8 @@ fn pasture(px: f32, py: f32, base: [u8; 3], glint: [u8; 3], seed: u32) -> Paint 
     let d = distance(px, py, sun);
     // The sky warms toward the horizon.
     paint.over(mix(base, glint, 0.8), smooth((py - 0.15) / 0.6) * gauss((px - sun.0) / 1.1) * 0.28);
-    paint.over(mix(base, glint, 0.9), gauss(d / 0.30) * 0.45);
-    paint.over(mix(base, glint, 1.0), ((0.105 - d) * HEIGHT as f32 + 0.5).clamp(0.0, 1.0) * 0.95);
+    paint.over(mix(base, glint, 0.9), gauss(d / 0.28) * 0.34);
+    paint.over(mix(base, glint, 1.0), smooth((0.075 - d) / 0.03 + 0.5) * 0.5);
     // Each dune: where its crest is, how tall its swell, how fast it turns, its tint and how deep it is.
     const DUNES: [(f32, f32, f32, f32, f32); 4] =
         [(0.68, 0.10, 0.9, 0.80, 0.16), (0.77, 0.11, 1.2, 0.86, 0.20), (0.86, 0.10, 1.5, 0.92, 0.24), (0.95, 0.07, 1.9, 1.00, 0.30)];

@@ -166,14 +166,18 @@ fn paragraphs(text: &str, limit: usize, colour: Hsla) -> Div {
 pub fn render(shell: &mut Shell, selected: Option<String>, cx: &mut Context<Shell>) -> AnyElement {
     let t = theme(cx).clone();
     // No run chosen is not a blank page: the one that wants you comes first, then the one working, then the newest.
-    let selected = selected.or_else(|| first_to_read(cx));
+    let selected = selected.or_else(|| first_to_read(shell.runs_filter, cx));
     let detail: AnyElement = match selected {
         None => div()
             .flex_1()
             .child(ui::empty(
                 "runs",
-                "No runs yet",
-                "Hand the team a goal from a conversation, and its run appears here with who is working on what.",
+                if shell.runs_filter == Filter::All { "No runs yet" } else { "Nothing under this filter" },
+                if shell.runs_filter == Filter::All {
+                    "Hand the team a goal from a conversation, and its run appears here with who is working on what."
+                } else {
+                    "Choose All to see every run."
+                },
                 cx,
             ))
             .into_any_element(),
@@ -1786,10 +1790,12 @@ fn title_of(run: &Value) -> String {
     format!("{}…", kept.trim_end_matches(|c: char| c.is_whitespace() || matches!(c, ',' | ';' | ':' | '(' | '-')))
 }
 
-/// The run to open when none is chosen: one that needs a person, else one still working, else the newest.
-fn first_to_read(cx: &mut Context<Shell>) -> Option<String> {
+/// The run to open when none is chosen, among those the list shows: one that needs a person, else one still working,
+/// else the newest.
+fn first_to_read(filter: Filter, cx: &mut Context<Shell>) -> Option<String> {
     let snap = devd(cx).sync.watch(&q::runs());
-    let runs = snap.list("");
+    // Only what the list is showing: an empty "Needs you" must not open a finished run beside it.
+    let runs: Vec<&Value> = snap.list("").iter().filter(|r| filter.admits(r["state"].as_str().unwrap_or_default())).collect();
     let pick = |wanted: &dyn Fn(&str) -> bool| {
         runs.iter()
             .find(|r| wanted(r["state"].as_str().unwrap_or_default()))
