@@ -743,7 +743,8 @@ pub fn server(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
                                 let detail =
                                     check["detail"].as_str().unwrap_or_default().to_string();
                                 // A line about a folder is told apart by its end; a sentence by its start.
-                                if detail.contains(":\\") || detail.starts_with('/') {
+                                // Only a line that begins as a path: a sentence that merely names one lost its opening words.
+                                if detail.get(1..3) == Some(":\\") || detail.starts_with('/') {
                                     ui::Clip::tail(detail)
                                 } else {
                                     ui::Clip::new(detail)

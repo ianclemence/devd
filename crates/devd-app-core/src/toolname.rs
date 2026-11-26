@@ -724,6 +724,7 @@ fn object_of(id: &str, args: &Value) -> String {
         }),
         "team.assign" => text("member"),
         "todo.create" => text("title"),
+        "toolchain.service" | "toolchain.remove" => text("tool"),
         "service.start" | "service.stop" | "service.restart" | "site.create"
         | "toolchain.install" | "runtime.install" => text("name")
             .or_else(|| text("tool"))
@@ -1037,5 +1038,16 @@ mod tests {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod service_tests {
+    use super::*;
+
+    #[test]
+    fn a_failed_service_action_names_the_service() {
+        let said = describe("toolchain.service", &serde_json::json!({ "tool": "nginx", "action": "start" }), Phase::Failed);
+        assert_eq!(said.object, "nginx", "{said:?}");
     }
 }

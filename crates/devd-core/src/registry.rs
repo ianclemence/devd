@@ -68,6 +68,8 @@ const ROUTINE_READS: &[&str] = &[
     "stack.list",
     // The Browser pane asks which tabs are open every time it draws; 43,000 rows of it buried the real record.
     "browser.status",
+    // The window asks this on its own to offer an update; it was recorded every few minutes as something you did.
+    "update.check",
 ];
 
 fn is_routine_read(cap: &Capability, ctx: &Ctx) -> bool {
