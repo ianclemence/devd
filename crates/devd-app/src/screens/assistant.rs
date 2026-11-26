@@ -2399,8 +2399,8 @@ fn devd_writes(
         }
         column = column.child(head);
     }
-    // The assistant speaks as a member of the room too: a face and its name at the start of each reply, with the model
-    // beside it in a quiet voice. A reply that is still being written has its face ringed and says so there, in the
+    // The assistant speaks as a member of the room too: a face and its name at the start of each reply, and nothing else
+    // beside it. A reply that is still being written has its face ringed and says so there, in the
     // place the eye already is, instead of under the text.
     let own_head = role.is_none() && (live || !model.is_empty());
     if own_head {
@@ -2418,30 +2418,18 @@ fn devd_writes(
             );
         if live {
             head = head.child(div().text_size(px(size::TEXT_XS)).text_color(t.accent).child("writing…"));
-        } else {
-            head = head.child(div().text_size(px(size::TEXT_XS)).text_color(t.faint).child(model.to_string()));
         }
         column = column.child(head);
     }
     column = column.child(md::document(id, blocks, cx));
-    if live {
-        if role.is_some() {
-            column = column.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(6.0))
-                    .child(live_dot("writing", Tone::Accent, cx))
-                    .child(div().text_size(px(size::TEXT_XS)).text_color(t.faint).child("writing")),
-            );
-        }
-    } else if !model.is_empty() && !own_head {
+    if live && role.is_some() {
         column = column.child(
             div()
-                .font_family(mono())
-                .text_size(px(10.5))
-                .text_color(t.faint)
-                .child(model.to_string()),
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .child(live_dot("writing", Tone::Accent, cx))
+                .child(div().text_size(px(size::TEXT_XS)).text_color(t.faint).child("writing")),
         );
     }
     // A teammate's turn is a bubble, not a wall: the card is what makes a room read as a room.
