@@ -766,6 +766,12 @@ impl CompletionPolicy {
                 false,
                 "the request asks for understanding, not a change",
             )
+        } else if has(&["theme", "appearance", "colour scheme", "color scheme", "dark mode", "light mode"])
+            && !has(&["site", "website", "app", "project", "page", "css", "file", "component", "code", "repo", "wordpress"])
+        {
+            // The look of devd itself is a saved theme, not a change to anyone's code: there is no diff to inspect and no
+            // test to run, and asking for them sent the assistant back to prove something that cannot be proved.
+            ("appearance", true, false, "a theme is done when devd has saved it")
         } else if has(&[
             "failing test",
             "test failure",
@@ -2229,5 +2235,19 @@ mod tests {
         let mut d = RunContext::new("r");
         d.deadline = Some(Instant::now() - std::time::Duration::from_millis(1));
         assert!(matches!(d.check(), Err(DevdError::Timeout(_))));
+    }
+}
+
+#[cfg(test)]
+mod appearance_tests {
+    use super::*;
+
+    #[test]
+    fn asking_devd_for_a_new_look_needs_a_saved_theme_and_no_test_run() {
+        let policy = CompletionPolicy::for_goal("change my theme to a calm forest at dusk", &[]);
+        assert_eq!((policy.kind.as_str(), policy.requires_change, policy.requires_verify), ("appearance", true, false));
+        // The look of someone's website is their code.
+        let theirs = CompletionPolicy::for_goal("change the theme of my website", &[]);
+        assert!(theirs.requires_verify, "{theirs:?}");
     }
 }

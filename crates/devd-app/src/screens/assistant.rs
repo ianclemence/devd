@@ -85,37 +85,18 @@ pub fn fold(events: &[Value], pending: &[&str], running: bool) -> Vec<Item> {
     // group chat does. A tool line between them does not change who is talking; another member
     // speaking, or the person writing, does.
     let mut speaker: Option<String> = None;
-    // Output tokens, cost and time of the model's replies since the person last spoke.
-    let mut turn: (u64, f64, u64) = (0, 0.0, 0);
     for event in events {
         let data = &event["data"];
         let data_event_id = event["id"].as_i64().unwrap_or_default();
-        if event["kind"] == "user" && data["gate"] != json!(true) && data["drawing"] != json!(true) && data["goal"] != json!(true) {
-            turn = (0, 0.0, 0);
-        }
         match event["kind"].as_str().unwrap_or_default() {
-            // devd's own reminder before it lets a turn end is not something the person said.
-            "user" if data["gate"] == json!(true) => {
-                let n = data["objections"].as_u64().unwrap_or(1);
-                items.push(Item::Notice(format!(
-                    "devd sent it back to finish: {n} thing{} still open",
-                    if n == 1 { " was" } else { "s were" }
-                )));
-            }
+            // devd's own reminders to the model (finish this, draw that again) are between it and the model.
+            "user" if data["gate"] == json!(true) || data["drawing"] == json!(true) => {}
             // The goal is still open: devd asked the model again whether it is met.
             "user" if data["goal"] == json!(true) => {
                 items.push(Item::Notice(format!(
                     "devd asked again whether the goal is met \u{b7} {} of {}",
                     data["step"].as_u64().unwrap_or(1),
                     data["of"].as_u64().unwrap_or(25)
-                )));
-            }
-            // The same for a drawing devd sent back because it could not be drawn.
-            "user" if data["drawing"] == json!(true) => {
-                let n = data["problems"].as_u64().unwrap_or(1);
-                items.push(Item::Notice(format!(
-                    "devd asked it to draw that again: {n} problem{} with the drawing",
-                    if n == 1 { "" } else { "s" }
                 )));
             }
             "user" => items.push(Item::You {
@@ -130,11 +111,7 @@ pub fn fold(events: &[Value], pending: &[&str], running: bool) -> Vec<Item> {
                 text: data["text"].as_str().unwrap_or_default().to_string(),
             }),
             "assistant" => {
-                // What the turn has cost so far: the label under its last words carries the whole turn.
-                turn.0 += data["usage"]["output"].as_u64().unwrap_or(0);
-                turn.1 += data["usage"]["cost_usd"].as_f64().unwrap_or(0.0);
-                turn.2 += data["took_ms"].as_u64().unwrap_or(0);
-                let model = reply_label(data["model"].as_str().unwrap_or_default(), turn);
+                let model = data["model"].as_str().unwrap_or_default().to_string();
                 for block in data["content"].as_array().map(Vec::as_slice).unwrap_or(&[]) {
                     match block["type"].as_str().unwrap_or_default() {
                         "text" => {
@@ -222,9 +199,14 @@ pub fn fold(events: &[Value], pending: &[&str], running: bool) -> Vec<Item> {
                     }
                 }
             }
-            "notice" => items.push(Item::Notice(
-                data["text"].as_str().unwrap_or_default().to_string(),
-            )),
+            "notice" => {
+                let text = data["text"].as_str().unwrap_or_default();
+                // One closing note: "not verified" says again what "left open" has just said.
+                let said = matches!(items.last(), Some(Item::Notice(before)) if before.starts_with("It stopped with"));
+                if !(said && text.starts_with("Finished, but not verified")) {
+                    items.push(Item::Notice(text.to_string()));
+                }
+            }
             "error" => items.push(Item::Failed(
                 data["message"].as_str().unwrap_or_default().to_string(),
             )),
@@ -269,16 +251,27 @@ fn fold_steps(items: Vec<Item>) -> Vec<Item> {
     // that changed them is not shown twice, so the step before a change is its line.
     let mut apart: Vec<Item> = Vec::new();
     fn flush(run: &mut Vec<Item>, apart: &mut Vec<Item>, out: &mut Vec<Item>) {
-        match run.len() {
-            0 => {}
-            1 => out.append(run),
+        match run.as_slice() {
+            [] => {}
+            [Item::Tool { ok: Some(true), .. }] => out.append(run),
             _ => out.push(Item::Steps(std::mem::take(run))),
         }
         out.append(apart);
     }
-    for item in items {
+    // Whether the agent went on after this step in the same turn: a failure it got past is part of the work, and
+    // only a failure the turn ends on is something the person has to see.
+    let went_on: Vec<bool> = (0..items.len())
+        .map(|at| {
+            items[at + 1..]
+                .iter()
+                .take_while(|later| !matches!(later, Item::You { .. }))
+                .any(|later| matches!(later, Item::Devd { .. } | Item::Tool { ok: Some(true), .. }))
+        })
+        .collect();
+    for (at, item) in items.into_iter().enumerate() {
         match &item {
             Item::Tool { ok: Some(true), .. } => run.push(item),
+            Item::Tool { ok: Some(false), .. } if went_on[at] => run.push(item),
             Item::Tool { ok: Some(false), .. } => apart.push(item),
             Item::Changes { .. } => {
                 if matches!(run.last(), Some(Item::Tool { .. })) {
@@ -299,34 +292,6 @@ fn fold_steps(items: Vec<Item>) -> Vec<Item> {
 thread_local! {
     /// Whether the conversation on screen is running, so a step in progress is shown once, in the status line.
     static RUNNING_LINE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-/// The three parts of a conversation's token count, said apart: fresh input, cache reads, output.
-/// The provider's prompt total includes the cache, so one number would read as 16× the fresh work.
-fn token_facts(input: u64, cached: u64, out: u64) -> String {
-    format!(
-        "{} fresh in · {} cached · {} out",
-        ui::compact(input.saturating_sub(cached)),
-        ui::compact(cached),
-        ui::compact(out)
-    )
-}
-
-/// The quiet line under a reply: the model, then what the turn took, such as "deepseek-flash · 2.3k out ·
-/// 41/s · $0.012". A figure that was not recorded is left out rather than shown as zero.
-fn reply_label(model: &str, (tokens, cost, ms): (u64, f64, u64)) -> String {
-    let mut parts = vec![model.to_string()];
-    if tokens > 0 {
-        parts.push(format!("{} out", ui::compact(tokens)));
-        if ms > 0 {
-            parts.push(format!("{:.0} tok/s", tokens as f64 / (ms as f64 / 1000.0)));
-        }
-    }
-    if cost > 0.0 {
-        parts.push(if cost < 0.01 { format!("${cost:.4}") } else { format!("${cost:.2}") });
-    }
-    parts.retain(|p| !p.is_empty());
-    parts.join(" · ")
 }
 
 /// Who a row belongs to, for spacing: every row of one turn shares a value, and a new value starts
@@ -1303,9 +1268,6 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
     // The provider's prompt count includes the cache hits. Shown as one number it reads as fresh
     // work, which it is not: on a tool-using conversation most of it is the same prefix read again
     // at a tenth of the price. Say each part, so the fresh work is what the eye lands on.
-    let input = thread["input_tokens"].as_u64().unwrap_or(0);
-    let cached = thread["cache_read_tokens"].as_u64().unwrap_or(0);
-    let out = thread["output_tokens"].as_u64().unwrap_or(0);
     // Relative paths in this conversation's replies are read against its project.
     cx.global_mut::<crate::state::Devd>().link_root =
         thread["project"].as_str().map(std::path::PathBuf::from);
@@ -1361,9 +1323,6 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
         if !roles.is_empty() {
             facts.push(roles.join(", "));
         }
-    }
-    if input + out > 0 {
-        facts.push(token_facts(input, cached, out));
     }
     if let Some(snap) = devd(cx).sync.peek(&q::threads()) {
         let origin = snap
@@ -1796,44 +1755,14 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
                 .children(stopped)
                 .children(waiting_rows(id, &data, cx))
                 .children(running.then(|| {
-                    // The reasoning sits behind a click, not in the line: "Thinking" says the model
-                    // is working, and opening it shows the process - the way the assistants people
-                    // already use do it. Nothing of the thought is shown until they ask.
-                    let t = theme(cx);
+                    // One row says what is happening. When there is a thought to read, that same row opens it.
                     let open = cx.global::<crate::state::Devd>().thinking_open.contains(id);
-                    let mut column = div().w_full().max_w(px(size::READING)).mx_auto().flex_col();
-                    if let Some(text) = thought.clone() {
-                        let key = id.to_string();
-                        let head = Button::new("thread.thinking", "Thinking")
-                            .kind(ButtonKind::Ghost)
-                            .icon(if open { "chevron-down" } else { "chevron-right" })
-                            .on_click(move |_, _, cx| {
-                                let devd = cx.global_mut::<crate::state::Devd>();
-                                if !devd.thinking_open.remove(&key) {
-                                    devd.thinking_open.insert(key.clone());
-                                }
-                                cx.refresh_windows();
-                            });
-                        column = column.child(div().pb(px(6.0)).child(head));
-                        if open {
-                            column = column.child(
-                                div()
-                                    .id(ui::nid("thinking.body", 0))
-                                    .max_h(px(220.0))
-                                    .overflow_y_scroll()
-                                    .pb(px(8.0))
-                                    .text_size(px(size::TEXT_SM))
-                                    .line_height(px(19.0))
-                                    .text_color(t.faint)
-                                    .child(text),
-                            );
-                        }
-                    }
-                    column.child(activity_line(doing.clone(), turn_began, cx))
-                }))                .child(composer(
+                    activity_line(id, doing.clone(), turn_began, thought.clone(), open, cx)
+                }))
+                .child(composer(
                     shell,
                     if running {
-                        "A message sent now is read at its next step"
+                        "Sends at the next step"
                     } else {
                         "Enter sends · Shift+Enter adds a line"
                     },
@@ -1884,35 +1813,70 @@ fn forget_running(thread: &str, index: usize) -> Option<u64> {
     None
 }
 
-/// While devd works: what it is doing now, and how long since the person last spoke. It sits at the foot of
-/// the reply, above the message box, for the whole turn: a step running ("Running go test"), the model
-/// thinking, or the words being written. The thought itself is not here - it is behind the "Thinking"
-/// control above this line - because reasoning read as it streams is noise, not progress.
-fn activity_line(doing: String, since: Option<chrono::DateTime<chrono::Utc>>, cx: &App) -> AnyElement {
+/// While devd works: one row at the foot of the reply, in the column and aligned with the steps above it, saying
+/// what it is doing and for how long. A step running ("Running go test"), the words being written, or the model
+/// thinking; while it thinks the row opens the thought beneath itself, so there is never a second "Thinking".
+fn activity_line(
+    thread: &str,
+    doing: String,
+    since: Option<chrono::DateTime<chrono::Utc>>,
+    thought: Option<String>,
+    open: bool,
+    cx: &App,
+) -> AnyElement {
     let t = theme(cx);
     let took = since.map(|at| took((chrono::Utc::now() - at).num_seconds().max(0) as u64));
+    let mut row = div()
+        .id("thread.activity")
+        .flex()
+        .items_center()
+        .gap(px(6.0))
+        .pl(px(2.0))
+        .min_h(px(24.0))
+        .overflow_hidden()
+        .text_size(px(size::TEXT_SM))
+        .child(div().w(px(16.0)).flex().flex_none().justify_center().child(ui::motion::spinner("thread.spinner", t.accent)))
+        .child(div().min_w_0().text_color(t.muted).child(doing))
+        .children(took.map(|took| div().flex_none().text_color(t.faint).child(format!("· {took}"))));
+    if thought.is_some() {
+        let key = thread.to_string();
+        row = row
+            .cursor_pointer()
+            .hover(|s| s.opacity(0.8))
+            .child(div().flex_none().child(icon(if open { "chevron-down" } else { "chevron-right" }, 12.0, t.faint)))
+            .on_click(move |_, _, cx| {
+                let devd = cx.global_mut::<crate::state::Devd>();
+                if !devd.thinking_open.remove(&key) {
+                    devd.thinking_open.insert(key.clone());
+                }
+                cx.refresh_windows();
+            });
+    }
     div()
         .w_full()
         .max_w(px(size::READING))
         .mx_auto()
-        .pb(px(10.0))
+        .pb(px(8.0))
         .flex()
-        .items_center()
-        .gap(px(10.0))
-        .overflow_hidden()
-        .text_size(px(size::TEXT_SM))
-        .child(div().flex_none().child(ui::motion::spinner("thread.spinner", t.accent)))
-        // What is running wraps: the line saying what is taking seven minutes must be readable, and
-        // a test name is long.
-        .child(
+        .flex_col()
+        .items_start()
+        .gap(px(4.0))
+        .child(row)
+        .children(thought.filter(|_| open).map(|text| {
             div()
-                .flex_1()
-                .min_w_0()
-                .text_color(t.muted)
-                .child(doing),
-        )
-        .children(took.map(|took| div().flex_none().font_family(mono()).text_size(px(size::TEXT_XS)).text_color(t.faint).child(took)))
-
+                .id(ui::nid("thinking.body", 0))
+                .w_full()
+                .max_h(px(220.0))
+                .overflow_y_scroll()
+                .ml(px(9.0))
+                .pl(px(14.0))
+                .border_l_1()
+                .border_color(t.line_strong)
+                .text_size(px(size::TEXT_SM))
+                .line_height(px(19.0))
+                .text_color(t.faint)
+                .child(text)
+        }))
         .into_any_element()
 }
 
@@ -2614,13 +2578,17 @@ mod tests {
     }
 
     #[test]
-    fn a_conversations_tokens_are_said_apart_not_as_one_prompt_total() {
-        assert_eq!(
-            token_facts(1_000, 800, 50),
-            "200 fresh in · 800 cached · 50 out",
-            "the prompt total is mostly cache reads and must not read as fresh work"
-        );
-        assert_eq!(token_facts(400, 0, 0), "400 fresh in · 0 cached · 0 out");
+    fn a_failure_the_agent_got_past_folds_away_and_one_that_ends_the_turn_stays() {
+        let call = |id: &str| event("assistant", json!({ "model": "m", "content": [{ "type": "tool_use", "id": id, "name": "run_command", "input": {} }] }));
+        let done = |id: &str, bad: bool| event("tool_result", json!({ "tool_use_id": id, "is_error": bad, "content": "{}" }));
+        let say = event("assistant", json!({ "model": "m", "content": [{ "type": "text", "text": "Done." }] }));
+        let go = event("user", json!({ "text": "go" }));
+        let gate = event("user", json!({ "text": "[devd] finish", "gate": true, "objections": 1 }));
+        let got_past = fold(&[go.clone(), call("a"), done("a", true), gate, say], &[], false);
+        assert!(matches!(&got_past[1], Item::Steps(s) if s.len() == 1), "{got_past:?}");
+        assert_eq!(got_past.len(), 3, "devd's reminder to the model is not shown: {got_past:?}");
+        let ended = fold(&[go, call("a"), done("a", true)], &[], false);
+        assert!(matches!(&ended[1], Item::Tool { ok: Some(false), .. }), "{ended:?}");
     }
 
     /// A member keeps their colour: the same role always reads the same, and the palette never

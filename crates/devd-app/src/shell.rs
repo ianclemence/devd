@@ -345,6 +345,9 @@ pub struct Shell {
     palette: Option<Palette>,
     /// The message box, shared by Home and the Assistant.
     pub composer: Entity<TextInput>,
+    /// What is typed but not sent, kept for each conversation, and which one the message box now holds.
+    drafts: std::collections::HashMap<String, String>,
+    draft_of: String,
     /// What the message box has chosen besides its text.
     pub compose: screens::compose::Compose,
     /// The conversation on screen, prepared for drawing.
@@ -437,6 +440,8 @@ impl Shell {
             commands: commands(),
             palette: None,
             composer,
+            drafts: Default::default(),
+            draft_of: String::new(),
             compose: Default::default(),
             transcript: screens::assistant::Transcript::new(),
             _watch: watch,
@@ -1905,6 +1910,7 @@ fn note_first_frame(home: &str) {
 
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_draft(cx);
         // The first frame is the number a person feels, so it is written down once per launch.
         note_first_frame(&devd(cx).conn.home);
         // Which conversation is in front is decided again every frame, by the screen that draws one.
@@ -2113,5 +2119,30 @@ impl Shell {
             }
         }
         cx.notify();
+    }
+}
+
+impl Shell {
+    /// Give each conversation its own unsent words. The message box is one control, so on arriving at another
+    /// conversation what was typed is put by and that conversation's own words are brought back. A new
+    /// conversation and Home share one; a screen with no message box changes nothing.
+    pub(crate) fn sync_draft(&mut self, cx: &mut Context<Self>) {
+        let here = match self.history.current() {
+            Route::Assistant(Some(id)) => id.clone(),
+            Route::Assistant(None) | Route::Home => String::new(),
+            _ => return,
+        };
+        if here == self.draft_of {
+            return;
+        }
+        let typed = self.composer.read(cx).text().to_string();
+        let left = std::mem::replace(&mut self.draft_of, here);
+        if typed.is_empty() {
+            self.drafts.remove(&left);
+        } else {
+            self.drafts.insert(left, typed);
+        }
+        let kept = self.drafts.remove(&self.draft_of).unwrap_or_default();
+        self.composer.update(cx, |input, cx| input.set_text(kept, cx));
     }
 }
