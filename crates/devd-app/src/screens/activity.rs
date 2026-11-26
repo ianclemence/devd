@@ -76,9 +76,9 @@ pub fn activity(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
             Button::new(
                 "activity.reads",
                 if shows_reads {
-                    "Hide what only looked".to_string()
+                    "Hide read-only actions".to_string()
                 } else {
-                    format!("Show {hidden} that only looked")
+                    format!("Show {hidden} read-only actions")
                 },
             )
             .kind(crate::ui::ButtonKind::Ghost)
@@ -326,7 +326,7 @@ pub fn settings(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
         .child(rule(cx))
         .child(row("Spend limit per run", text(p["max_cost_usd"].as_f64().map(crate::screens::intelligence::money).unwrap_or_else(|| "None set".to_string()))))
         .child(rule(cx))
-        .child(div().px(px(14.0)).py(px(10.0)).text_size(px(size::TEXT_XS)).text_color(t.faint).child("Only a person can change these, with `devd policy set`: an agent cannot loosen the rules it runs under."));
+        .child(div().px(px(14.0)).py(px(10.0)).text_size(px(size::TEXT_XS)).text_color(t.faint).child("Only a person can change these, with the devd policy set command. An agent cannot loosen the rules it runs under."));
     let column = div()
         .flex()
         .flex_col()
@@ -361,5 +361,6 @@ pub fn settings(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
                 .child(eyebrow("POLICY", cx))
                 .child(rules),
         );
-    ui::page("settings", 820.0, column).into_any_element()
+    // The same width as every other screen, so the title and tabs do not jump sideways when you arrive here.
+    ui::page("settings", size::PAGE, column).into_any_element()
 }

@@ -240,6 +240,14 @@ impl History {
         &self.entries[self.at]
     }
 
+    /// The conversation last open, looking back from here, so a return to the Assistant is a return to it.
+    pub fn last_conversation(&self) -> Option<String> {
+        self.entries[..=self.at].iter().rev().find_map(|r| match r {
+            Route::Assistant(Some(id)) => Some(id.clone()),
+            _ => None,
+        })
+    }
+
     /// Go somewhere. Anything Forward would have returned to is forgotten, and
     /// going to where you already are records nothing.
     pub fn go(&mut self, route: Route) -> bool {
@@ -297,6 +305,21 @@ impl History {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_assistant_remembers_the_conversation_you_left() {
+        let mut h = History::new(Route::Home);
+        assert_eq!(h.last_conversation(), None);
+        h.go(Route::Assistant(Some("a".into())));
+        h.go(Route::Sites(None));
+        h.go(Route::Assistant(Some("b".into())));
+        h.go(Route::Runs(None));
+        assert_eq!(h.last_conversation().as_deref(), Some("b"));
+        // What is forward of here was left, not returned to.
+        h.back();
+        h.back();
+        assert_eq!(h.last_conversation().as_deref(), Some("a"));
+    }
 
     #[test]
     fn every_route_reads_back_from_its_own_text() {

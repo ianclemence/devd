@@ -26,7 +26,7 @@ use crate::shell::Shell;
 use crate::screens::modal::{Field, FormSpec};
 use crate::state::{devd, q};
 use crate::theme::{Tone, mono, size, theme};
-use crate::ui::{self, Button, ButtonKind, eyebrow, icon, live_dot, markdown as md};
+use crate::ui::{self, tint, Button, ButtonKind, eyebrow, icon, live_dot, markdown as md};
 
 /// One thing a person reads in a conversation.
 #[derive(Debug, Clone, PartialEq)]
@@ -319,7 +319,7 @@ fn reply_label(model: &str, (tokens, cost, ms): (u64, f64, u64)) -> String {
     if tokens > 0 {
         parts.push(format!("{} out", ui::compact(tokens)));
         if ms > 0 {
-            parts.push(format!("{:.0}/s", tokens as f64 / (ms as f64 / 1000.0)));
+            parts.push(format!("{:.0} tok/s", tokens as f64 / (ms as f64 / 1000.0)));
         }
     }
     if cost > 0.0 {
@@ -378,7 +378,13 @@ fn result_line(text: &str, failed: bool) -> String {
             .unwrap_or_default()
     };
     let line = line.lines().next().unwrap_or_default().trim();
-    line.chars().take(160).collect()
+    // A reason is read whole: cut at a word, never in the middle of one.
+    if line.chars().count() <= 320 {
+        return line.to_string();
+    }
+    let cut: String = line.chars().take(320).collect();
+    let cut = cut.rsplit_once(' ').map(|(head, _)| head).unwrap_or(&cut);
+    format!("{cut}…")
 }
 
 /// The conversation on screen, prepared for drawing.
@@ -471,9 +477,10 @@ impl Default for Transcript {
 pub fn render(
     shell: &mut Shell,
     thread: Option<String>,
-    _window: &mut Window,
+    window: &mut Window,
     cx: &mut Context<Shell>,
 ) -> AnyElement {
+    use super::pane::{CONVERSATION_MIN, NARROWEST, STRIP};
     // The strip first: it opens the pane when the assistant has just started the browser.
     let strip = super::pane::strip(shell, cx);
     let current = thread.clone();
@@ -484,12 +491,24 @@ pub fn render(
     // A browser that has taken the window is the thing being looked at: the conversation and the
     // list step aside so the page has every pixel, and the strip stays so it can be given back.
     let maximised = shell.pane.browser_maximised && shell.pane.browser;
+    // The room a pane may take is what is left after the conversation keeps its minimum. When the window is too
+    // narrow for the list, the conversation and a usable pane, the list steps aside first: it is one click away,
+    // the conversation is what is being read.
+    let row_width = f32::from(window.viewport_size().width) - size::RAIL;
+    let collapsed = cx.global::<crate::state::Devd>().sidebar_collapsed;
+    let list_width = if collapsed { size::COLLAPSED } else { cx.global::<crate::state::Devd>().list_width };
+    let room_with_list = row_width - list_width - STRIP - CONVERSATION_MIN;
+    let show_list = !shell.pane.any() || room_with_list >= NARROWEST;
+    let room = if show_list { room_with_list } else { row_width - STRIP - CONVERSATION_MIN };
     let mut row = div().size_full().flex();
     if !maximised {
-        row = row.child(sidebar(current.as_deref(), cx)).child(main);
+        if show_list {
+            row = row.child(sidebar(current.as_deref(), cx));
+        }
+        row = row.child(main);
     }
     row = row
-        .children(super::pane::pane(shell, cx))
+        .children(super::pane::pane(shell, row_width, room, cx))
         .child(strip)
         .bg(ui::ground(cx));
     row.into_any_element()
@@ -631,8 +650,11 @@ fn sidebar(current: Option<&str>, cx: &mut Context<Shell>) -> AnyElement {
             )
             .into_any_element();
     }
+    let wide = cx.global::<crate::state::Devd>().list_width;
+    let grip = ui::grip("sidebar.grip", crate::state::Edge::List, wide, false, cx);
     div()
-        .w(px(size::SIDEBAR))
+        .w(px(wide))
+        .relative()
         .h_full()
         .flex()
         .flex_col()
@@ -665,6 +687,7 @@ fn sidebar(current: Option<&str>, cx: &mut Context<Shell>) -> AnyElement {
                 .child(column),
         )
         .child(clear)
+        .child(grip)
         .into_any_element()
 }
 
@@ -1604,10 +1627,11 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
                 }))
                 .children((!facts.is_empty()).then(|| {
                     div()
-                        .flex_none()
+                        .min_w_0()
+                        .overflow_hidden()
                         .text_size(px(size::TEXT_SM))
                         .text_color(t.faint)
-                        .child(facts.join("  ·  "))
+                        .child(ui::Clip::new(facts.join("  ·  ")))
                 })),
         )
         .child(actions);
@@ -1711,7 +1735,9 @@ fn conversation(shell: &mut Shell, id: &str, cx: &mut Context<Shell>) -> AnyElem
             .px(px(24.0))
             .pt(px(if opens_turn { 22.0 } else { 7.0 }))
             .pb(px(7.0))
-            .child(div().w_full().max_w(px(size::READING)).child(content))
+            // `min_w_0`: in a narrow column a row shrinks with it. Without it a row is at least as wide as its
+            // content, and a centred row wider than the column was cut off at the left edge.
+            .child(div().w_full().min_w_0().max_w(px(size::READING)).child(content))
             .into_any_element()
     })
     .size_full();
@@ -1955,8 +1981,10 @@ fn draw(thread: &str, index: usize, item: &Item, resume: bool, cx: &App) -> AnyE
         Item::You { text, pending } => div()
             .flex()
             .justify_end()
+            .min_w_0()
             .child(
                 div()
+                    .min_w_0()
                     .max_w(px(560.0))
                     .px(px(13.0))
                     .py(px(9.0))
@@ -2158,14 +2186,28 @@ fn draw(thread: &str, index: usize, item: &Item, resume: bool, cx: &App) -> AnyE
                     }
                 });
             if phase == Phase::Failed && !detail.is_empty() {
-                line = line.child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .text_size(px(size::TEXT_SM))
-                        .text_color(t.faint)
-                        .child(detail.clone()),
-                );
+                // Why it failed goes on its own line under the step, at the row's full width. Beside a long
+                // command it was squeezed to a column one letter wide.
+                let reason = div()
+                    .pl(px(26.0))
+                    .min_w_0()
+                    .text_size(px(size::TEXT_SM))
+                    .line_height(px(19.0))
+                    .text_color(t.muted)
+                    .child(detail.clone());
+                return div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.0))
+                    .px(px(10.0))
+                    .py(px(8.0))
+                    .rounded(px(size::RADIUS_L))
+                    .bg(tint(t.danger, 0.08))
+                    .border_1()
+                    .border_color(tint(t.danger, 0.22))
+                    .child(line)
+                    .child(reason)
+                    .into_any_element();
             }
             if let Some(took) = waiting.filter(|s| *s >= 15) {
                 line = line.child(
@@ -2393,22 +2435,43 @@ fn devd_writes(
         }
         column = column.child(head);
     }
+    // The assistant speaks as a member of the room too: a face and its name at the start of each reply, with the model
+    // beside it in a quiet voice. A reply that is still being written has its face ringed and says so there, in the
+    // place the eye already is, instead of under the text.
+    let own_head = role.is_none() && (live || !model.is_empty());
+    if own_head {
+        let mut head = div()
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .child(ui::face("d", Tone::Accent, live, cx))
+            .child(
+                div()
+                    .text_size(px(size::TEXT_XS))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(t.muted)
+                    .child("devd"),
+            );
+        if live {
+            head = head.child(div().text_size(px(size::TEXT_XS)).text_color(t.accent).child("writing…"));
+        } else {
+            head = head.child(div().text_size(px(size::TEXT_XS)).text_color(t.faint).child(model.to_string()));
+        }
+        column = column.child(head);
+    }
     column = column.child(md::document(id, blocks, cx));
     if live {
-        column = column.child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(6.0))
-                .child(live_dot("writing", Tone::Accent, cx))
-                .child(
-                    div()
-                        .text_size(px(size::TEXT_XS))
-                        .text_color(t.faint)
-                        .child("writing"),
-                ),
-        );
-    } else if !model.is_empty() {
+        if role.is_some() {
+            column = column.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .child(live_dot("writing", Tone::Accent, cx))
+                    .child(div().text_size(px(size::TEXT_XS)).text_color(t.faint).child("writing")),
+            );
+        }
+    } else if !model.is_empty() && !own_head {
         column = column.child(
             div()
                 .font_family(mono())

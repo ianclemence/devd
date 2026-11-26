@@ -26,6 +26,15 @@ pub const WIDTH: f32 = 500.0;
 /// looking at, and giving it half the window was the complaint.
 pub const SHARE: f32 = 0.72;
 
+/// The narrowest a pane is drawn: below this a terminal or a page is not usable.
+pub const NARROWEST: f32 = 360.0;
+
+/// The narrowest the conversation beside a pane is allowed to become.
+pub const CONVERSATION_MIN: f32 = 480.0;
+
+/// The width of the strip of pane buttons at the window's edge.
+pub const STRIP: f32 = 44.0;
+
 /// A panel.
 #[derive(Default, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tab {
@@ -184,17 +193,25 @@ pub fn header(
         .child(div().flex().items_center().gap(px(2.0)).children(right))
 }
 
-/// The folder a shell opens in: the one the conversation is about, else the first project.
+/// The folder a shell opens in: the one the conversation is about, else the person's home folder. The first
+/// project in the list was a guess that looked like an answer: a conversation about kata opened a shell in
+/// chitchatter, the project that happened to sort first.
 fn folder(cx: &Context<Shell>) -> Option<String> {
     if let Some(root) = devd(cx).link_root.as_ref() {
         return Some(root.display().to_string());
     }
-    devd(cx)
-        .sync
-        .watch(&q::projects())
-        .list("")
-        .iter()
-        .find_map(|p| p["path"].as_str().map(str::to_string))
+    std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .ok()
+        .filter(|home| !home.is_empty())
+        .or_else(|| {
+            devd(cx)
+                .sync
+                .watch(&q::projects())
+                .list("")
+                .iter()
+                .find_map(|p| p["path"].as_str().map(str::to_string))
+        })
 }
 
 impl Shell {
@@ -247,6 +264,11 @@ pub fn strip(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
             .cursor_pointer()
             .bg(if on { t.active } else { t.hover.opacity(0.0) })
             .hover(move |s| s.bg(hover))
+            // Named on hover, like the rail: a globe and a prompt glyph alone do not say what opens.
+            .tooltip(ui::tip(match tab {
+                Tab::Browser => "Browser",
+                Tab::Terminal => "Terminal",
+            }))
             .child(ui::icon(icon, 16.0, if on { t.text } else { t.muted }))
             .children(live.then(|| {
                 div()
@@ -291,20 +313,21 @@ pub fn strip(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
 }
 
 /// The panels that are open, one above the other.
-pub fn pane(shell: &mut Shell, cx: &mut Context<Shell>) -> Option<AnyElement> {
+pub fn pane(shell: &mut Shell, row: f32, room: f32, cx: &mut Context<Shell>) -> Option<AnyElement> {
     if !shell.pane.any() {
         return None;
     }
     let t = theme(cx).clone();
     let both = shell.pane.browser && shell.pane.terminal;
-    // Alone, a pane takes the room; beside another pane, it stays the compact column.
-    let mut column = div();
-    column = if both {
-        column.w(px(WIDTH))
-    } else {
-        column.w(gpui::relative(SHARE)).min_w(px(WIDTH))
-    };
+    // Alone, a pane takes the room; beside another pane, it stays the compact column. Either way it never takes
+    // the conversation's own minimum: `room` is what is left once that is kept. Taking a share of the window with
+    // nothing kept for the conversation squeezed it to a sliver when the terminal opened.
+    let wanted = cx.global::<crate::state::Devd>().pane_width.unwrap_or(if both { WIDTH } else { row * SHARE });
+    let width = wanted.min(room).max(NARROWEST);
+    let grip = ui::grip("pane.grip", crate::state::Edge::Pane, width, true, cx);
+    let column = div().w(px(width));
     let mut column = column
+        .relative()
         .h_full()
         .flex_none()
         .flex()
@@ -348,7 +371,8 @@ pub fn pane(shell: &mut Shell, cx: &mut Context<Shell>) -> Option<AnyElement> {
                 .id("pane.browser.body")
                 .flex_1()
                 .min_h_0()
-                .overflow_y_scroll()
+                .flex()
+                .flex_col()
                 .child(parts.body),
         );
         if both {
@@ -397,6 +421,7 @@ pub fn pane(shell: &mut Shell, cx: &mut Context<Shell>) -> Option<AnyElement> {
         };
         column = column.child(panel);
     }
+    column = column.child(grip);
     Some(
         ui::motion::slide_in(
             column.id("pane.panels"),

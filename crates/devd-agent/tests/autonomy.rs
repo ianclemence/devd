@@ -300,7 +300,7 @@ fn rules_are_listed_with_their_events_for_a_person_to_read() {
     let v = agent_call(&e, "intake.list", json!({ "project": dir })).unwrap();
     assert_eq!(v["rules"].as_array().unwrap().len(), 1);
     assert_eq!(v["rules"][0]["trigger_text"], "a watched site is down");
-    assert_eq!(v["triggers"].as_array().unwrap().len(), 3);
+    assert_eq!(v["triggers"].as_array().unwrap().len(), 6);
 }
 
 // --------------------------------------------------------------- the mandate

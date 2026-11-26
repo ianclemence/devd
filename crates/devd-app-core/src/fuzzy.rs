@@ -93,6 +93,14 @@ pub fn matches(query: &str, candidate: &str) -> Option<Match> {
             j = from[i * h + j];
         }
     }
+    // A longer query spread across most of a long candidate is not a match for it: "restart" found its letters in
+    // "Registry: settings, start-up". Short queries stay loose, as initials ("gs") must.
+    if n >= 4 {
+        let span = candidate[positions[0]..=positions[n - 1]].chars().count();
+        if span > n * 2 + 4 {
+            return None;
+        }
+    }
     Some(Match {
         score: score - (h as i32) / 4,
         positions,
@@ -179,5 +187,17 @@ mod tests {
             matches("nu", "nairobi_unwind").unwrap().score
                 > matches("nu", "nautilus").unwrap().score - 40
         );
+    }
+}
+
+#[cfg(test)]
+mod spread_tests {
+    use super::*;
+
+    #[test]
+    fn a_long_query_scattered_across_a_long_candidate_does_not_match() {
+        assert!(matches("restart", "Registry: settings, start-up and recovery").is_none());
+        assert!(matches("restart", "Restart the server").is_some());
+        assert!(matches("gs", "Git: Status").is_some());
     }
 }

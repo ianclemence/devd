@@ -148,12 +148,17 @@ pub fn inbox(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
                     }),
             );
         }
+        // News (a finished run) is a row you open, not a form to fill: the whole row opens the run and Dismiss sits at
+        // its right edge. Only a message that needs a decision carries its buttons under it, where they are read.
+        let news = is_open && !said.needs_you && message["run_id"].is_string();
+        let mut dismiss_button = None;
         if is_open {
             let dismiss = id.clone();
-            actions = actions.child(
-                Button::new(ui::nid("inbox.done", n), "Dismiss")
+            let button = Button::new(ui::nid("inbox.done", n), "Dismiss")
                     .kind(ButtonKind::Ghost)
                     .on_click(move |_, _, cx| {
+                        // Dismissing does not also open the run underneath it.
+                        cx.stop_propagation();
                         // The row leaves the open list at once; devd confirms after.
                         devd(cx).sync.mutate(
                             Mutation::new("inbox.reply", json!({ "id": dismiss })).optimistic(
@@ -166,8 +171,12 @@ pub fn inbox(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
                                 ),
                             ),
                         );
-                    }),
-            );
+                    });
+            if news {
+                dismiss_button = Some(button);
+            } else {
+                actions = actions.child(button);
+            }
         }
         // Where it comes from, what kind of thing it is, and when: one quiet line above what it says. The
         // body is shown as the one sentence a person needs, not as a paragraph of a model's report.
@@ -209,21 +218,34 @@ pub fn inbox(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
                     .text_color(if is_open { t.text } else { t.muted })
                     .child(ui::Clip::new(opening)),
             );
-        if is_open {
+        if is_open && !news {
             words = words.child(div().pt(px(4.0)).child(actions));
         }
 
-        list = list.child(
-            div()
-                .px(px(18.0))
-                .py(px(16.0))
-                .flex()
-                .items_start()
-                .gap(px(12.0))
-                .opacity(if is_open { 1.0 } else { 0.55 })
-                .child(div().h(px(16.0)).flex().items_center().child(ui::dot(tone, cx)))
-                .child(words),
-        );
+        let mut row = div()
+            .id(ui::nid("inbox.row", n))
+            .px(px(18.0))
+            .py(px(16.0))
+            .flex()
+            .items_start()
+            .gap(px(12.0))
+            .opacity(if is_open { 1.0 } else { 0.55 })
+            .child(div().h(px(16.0)).flex().items_center().child(ui::dot(tone, cx)))
+            .child(words);
+        if news {
+            let hover = t.hover;
+            let open = message["run_id"].as_str().map(str::to_string).unwrap_or_default();
+            row = row
+                .items_center()
+                .cursor_pointer()
+                .hover(move |s| s.bg(hover))
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.go(Route::Runs(Some(open.clone())), cx)
+                }))
+                .children(dismiss_button)
+                .child(ui::icon("chevron-right", 13.0, t.faint));
+        }
+        list = list.child(row);
     }
     ui::page("inbox", size::PAGE, column.child(list)).into_any_element()
 }
@@ -250,6 +272,13 @@ impl Shape {
             .collect::<Vec<_>>()
             .join(" ");
         match subject.split_once(": ") {
+            // News that a run finished is about the run: its title is what a person knows it by, and the outcome is the
+            // line under it. A decision leads with why instead, because that is what is acted on.
+            Some((word, rest)) if word == "Finished" && !rest.trim().is_empty() => Shape {
+                word: word.to_string(),
+                headline: rest.trim().to_string(),
+                about: Some(opening).filter(|o| !o.is_empty()),
+            },
             Some((word, rest)) if word.chars().count() <= 24 && !opening.is_empty() => Shape {
                 word: word.to_string(),
                 headline: opening,
@@ -460,14 +489,19 @@ pub fn server(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
         .and_then(|d| d["headline"].as_str())
         .unwrap_or("Reading the machine…")
         .to_string();
-    let actions =
-        div().child(
-            Button::new("server.start", "Start what is needed")
-                .icon("play")
-                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                    this.run("server.start", window, cx)
-                })),
-        );
+    // Offered only when something needed is not up: beside "Healthy" and five answering services it was a button
+    // with nothing to do.
+    let all_up = health
+        .data
+        .as_deref()
+        .is_some_and(|d| matches!(d["state"].as_str(), Some("healthy" | "starting")));
+    let actions = div().children((!all_up).then(|| {
+        Button::new("server.start", "Start what is needed")
+            .icon("play")
+            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                this.run("server.start", window, cx)
+            }))
+    }));
     let mut column = div()
         .flex()
         .flex_col()
@@ -558,9 +592,11 @@ pub fn server(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
             (true, false, _) => (Tone::Warn, "running, not answering"),
             // Something else started it: it answers, but devd did not start it and does not hold it. Calling that
             // "stopped" beside "4 of 4 workers answering" says two opposite things.
-            (false, true, _) => (Tone::Info, "answering, started outside devd"),
+            // Green: it answers, which is what a person needs to know. Where it came from is said in words.
+            (false, true, _) => (Tone::Ok, "answering, started outside devd"),
             (false, false, _) => (Tone::Neutral, "stopped"),
         };
+        let outside = !running && ready && !starting;
         let marker: AnyElement = if starting {
             live_dot(ui::nid("service.live", n), tone, cx).into_any_element()
         } else {
@@ -635,7 +671,11 @@ pub fn server(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
                                 .unwrap_or_default(),
                         ),
                 )
-                .child(
+                // A service another program started answers, and devd does not hold it: there is nothing for devd to
+                // start, and it does not stop what it did not start. A Start button beside "answering" said both.
+                .child(if outside {
+                    div().w(px(68.0)).flex_none().into_any_element()
+                } else {
                     Button::new(
                         gpui::ElementId::Name(format!("service.toggle.{name}").into()),
                         label,
@@ -655,8 +695,9 @@ pub fn server(_shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
                                 Patch::update_row(q::services(), "", "name", json!(target), shown),
                             ),
                         );
-                    }),
-                ),
+                    })
+                    .into_any_element()
+                }),
         );
     }
     column = column.child(

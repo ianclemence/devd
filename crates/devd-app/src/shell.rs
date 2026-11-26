@@ -23,7 +23,7 @@ use serde_json::json;
 
 use crate::screens;
 use crate::state::{Devd, devd, q};
-use crate::theme::{Theme, Tone, mono, size, theme};
+use crate::theme::{Theme, Tone, size, theme};
 use crate::ui::input::{InputEvent, TextInput};
 use crate::ui::{self, Button, ButtonKind, icon, kbd, live_dot, tint};
 
@@ -35,6 +35,7 @@ actions!(
         Forward,
         NewConversation,
         ToggleTheme,
+        ToggleRail,
         Go1,
         Go2,
         Go3,
@@ -65,6 +66,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("secondary-[", Back, None),
         KeyBinding::new("secondary-]", Forward, None),
         KeyBinding::new("secondary-shift-l", ToggleTheme, None),
+        KeyBinding::new("secondary-b", ToggleRail, None),
         KeyBinding::new("secondary-1", Go1, None),
         KeyBinding::new("secondary-2", Go2, None),
         KeyBinding::new("secondary-3", Go3, None),
@@ -229,6 +231,25 @@ pub fn commands() -> Commands {
     );
     table.add(
         Command::new(
+            "view.rail",
+            "Hide or show the navigation",
+            "Put the left-hand navigation away, so the screen has the whole window",
+            Section::View,
+        )
+        .key("secondary-b")
+        .keywords(&["sidebar", "navbar", "collapse", "menu"]),
+    );
+    table.add(
+        Command::new(
+            "view.list",
+            "Hide or show the conversation list",
+            "Put the list of conversations away, or bring it back",
+            Section::View,
+        )
+        .keywords(&["sidebar", "collapse", "conversations"]),
+    );
+    table.add(
+        Command::new(
             "view.theme",
             "Next theme",
             "Change how the whole window looks",
@@ -361,8 +382,9 @@ impl Shell {
         ));
         crate::mark(&crate::DICT_MS);
         let composer = cx.new(|cx| {
+            // Twelve rows before it scrolls: room to read back a long prompt without reaching for the wheel.
             TextInput::new("Ask devd anything. / for skills, @ for a teammate", cx)
-                .multiline(8)
+                .multiline(12)
                 .spelling(dictionary)
                 .linking()
         });
@@ -522,6 +544,16 @@ impl Shell {
                 cx.quit();
                 return;
             }
+            "view.rail" => {
+                let state = cx.global_mut::<Devd>();
+                state.rail_hidden = !state.rail_hidden;
+                cx.notify();
+                return;
+            }
+            "view.list" => {
+                self.toggle_sidebar(cx);
+                return;
+            }
             "view.theme" => {
                 let next = theme(cx).next(crate::theme::Library::of(cx));
                 let _ = crate::theme::save(std::path::Path::new(&devd(cx).conn.home), &next);
@@ -575,6 +607,12 @@ impl Shell {
                 if let Some(theme) = other.strip_prefix("view.theme.") {
                     self.choose_theme(theme, cx);
                 } else if let Some(route) = other.strip_prefix("go.").and_then(Route::parse) {
+                    // The Assistant is where your conversation is: going back to it returns to the one you were in,
+                    // not to an empty start screen. A new conversation is its own command.
+                    let route = match route {
+                        Route::Assistant(None) => Route::Assistant(self.history.last_conversation()),
+                        other => other,
+                    };
                     self.history.go(route);
                 }
             }
@@ -939,7 +977,7 @@ impl Shell {
                 .flex_none()
                 .rounded(px(7.0)),
         );
-        let item = |route: Route, badge: usize, tone: gpui::Hsla, also: Option<gpui::Hsla>, cx: &mut Context<Self>| {
+        let item = |route: Route, tip: String, badge: usize, tone: gpui::Hsla, also: Option<gpui::Hsla>, cx: &mut Context<Self>| {
             let selected = current.on_rail(&route);
             let color = if selected { t.text } else { t.faint };
             let hover = t.hover;
@@ -955,6 +993,8 @@ impl Shell {
                 .justify_center()
                 .rounded(px(size::RADIUS + 2.0))
                 .cursor_pointer()
+                // An icon alone does not say where it goes. The name and its shortcut appear on hover.
+                .tooltip(ui::tip(tip))
                 .child(icon(ui::screen_icon(&route), 17.0, color))
                 .on_click(
                     cx.listener(move |this, _: &ClickEvent, window, cx| this.run(&id, window, cx)),
@@ -1013,7 +1053,14 @@ impl Shell {
             }
             el
         };
-        for route in Route::primary() {
+        // The rail answers three questions, and a hairline marks where one ends: what needs you (Home, Inbox), who does
+        // the thinking (Assistant, Runs, Team, Intelligence), and what it works on (Projects, Sites, Server).
+        let divider = || div().w(px(20.0)).h(px(1.0)).my(px(6.0)).flex_none().bg(t.line);
+        for (n, route) in Route::primary().into_iter().enumerate() {
+            if n == 2 || n == 6 {
+                rail = rail.child(divider());
+            }
+            let tip = format!("{}  ·  Ctrl+{}", route.title(), n + 1);
             // One badge, one colour: the colour of the most urgent state it counts. The Inbox and
             // the Runs button therefore cannot disagree with a red or amber row inside them.
             let (badge, tone, also) = match route {
@@ -1026,11 +1073,11 @@ impl Shell {
                 Route::Runs(_) => (going, t.tone(Tone::from(going_level)), None),
                 _ => (0, t.warn, None),
             };
-            rail = rail.child(item(route, badge, tone, also, cx));
+            rail = rail.child(item(route, tip, badge, tone, also, cx));
         }
         rail.child(div().flex_1())
-            .child(item(Route::Activity, 0, t.warn, None, cx))
-            .child(item(Route::Settings, 0, t.warn, None, cx))
+            .child(item(Route::Activity, "Activity".to_string(), 0, t.warn, None, cx))
+            .child(item(Route::Settings, "Settings".to_string(), 0, t.warn, None, cx))
     }
 
     fn topbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1065,13 +1112,24 @@ impl Shell {
             .flex()
             .items_center()
             .gap(px(7.0))
-            .text_size(px(size::TEXT))
-            .child(
+            .text_size(px(size::TEXT));
+        // A page that is one tab of an area says the area first, "Team › Schedules", as the area's own tab does: on
+        // its own, "Schedules" did not say where in the window you were.
+        if let Route::Page(id) = &route
+            && let Some(page) = devd_app_core::pages::find(id)
+        {
+            crumbs = crumbs
+                .child(div().font_weight(FontWeight::MEDIUM).text_color(t.text).child(page.area.home().title()))
+                .child(icon("chevron-right", 11.0, t.faint))
+                .child(div().text_color(t.muted).child(page.title));
+        } else {
+            crumbs = crumbs.child(
                 div()
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(t.text)
                     .child(route.title()),
             );
+        }
         if let Some(selection) = route.selection() {
             crumbs = crumbs.child(icon("chevron-right", 11.0, t.faint)).child(
                 div()
@@ -1159,6 +1217,7 @@ impl Shell {
             .px(px(12.0))
             .border_b_1()
             .border_color(t.line)
+            .child(arrow("sidebar", true, "view.rail", cx))
             .child(arrow("arrow-left", self.history.can_back(), "go.back", cx))
             .child(arrow(
                 "arrow-right",
@@ -1214,10 +1273,14 @@ impl Shell {
                     "degraded" | "setup_incomplete" => Tone::Warn,
                     _ => Tone::Neutral,
                 };
-                (
-                    tone,
-                    data["headline"].as_str().unwrap_or("Checking").to_string(),
-                )
+                // Healthy is one short sentence here; the notes behind it are on the Server screen, where a person
+                // goes to read them. "Healthy, 4 optional notes" made a good day sound like homework.
+                let headline = if data["state"] == json!("healthy") {
+                    "Everything is running".to_string()
+                } else {
+                    data["headline"].as_str().unwrap_or("Checking").to_string()
+                };
+                (tone, headline)
             }
             None => (Tone::Neutral, "Checking the machine…".to_string()),
         };
@@ -1234,7 +1297,6 @@ impl Shell {
             .border_t_1()
             .border_color(t.line)
             .bg(t.surface)
-            .font_family(mono())
             .text_size(px(size::TEXT_XS))
             .text_color(t.faint)
             .child(
@@ -1286,14 +1348,14 @@ impl Shell {
             strip = strip.child(
                 div()
                     .text_color(t.muted)
-                    .child(format!("saving {pending}…")),
+                    .child("Saving…"),
             );
         }
         if !state.online {
             strip = strip.child(
                 div()
                     .text_color(t.warn)
-                    .child("live updates paused, reconnecting"),
+                    .child("Offline. Reconnecting…"),
             );
         }
         // A newer release: say so here, where it can always be seen, and install it from the same place.
@@ -1344,15 +1406,21 @@ impl Shell {
                     })),
             );
         }
+        // The version, and nothing else: which process serves the window and on which port is a diagnostic, kept
+        // for the moment someone asks, on hover, instead of being read on every screen.
+        let serving = format!(
+            "{} on 127.0.0.1:{}",
+            if state.conn.owner { "This window is devd" } else { "Connected to devd" },
+            state.conn.port
+        );
         strip
             .child(div().flex_1())
-            .child(if state.conn.owner {
-                "this window runs devd"
-            } else {
-                "attached to a running devd"
-            })
-            .child(format!("127.0.0.1:{}", state.conn.port))
-            .child(format!("devd {}", state.conn.version))
+            .child(
+                div()
+                    .id("status.version")
+                    .tooltip(ui::tip(serving))
+                    .child(format!("devd {}", state.conn.version)),
+            )
     }
 
     fn palette_overlay(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -1935,6 +2003,7 @@ impl Render for Shell {
             .on_action(
                 cx.listener(|this, _: &ToggleTheme, window, cx| this.run("view.theme", window, cx)),
             )
+            .on_action(cx.listener(|this, _: &ToggleRail, window, cx| this.run("view.rail", window, cx)))
             .on_action(
                 cx.listener(|this, _: &Refresh, window, cx| this.run("view.refresh", window, cx)),
             )
@@ -1983,7 +2052,19 @@ impl Render for Shell {
             .child(ui::wash(cx))
             .child(ui::picture(cx))
             .child(ui::art(cx))
-            .child(self.rail(cx))
+            .children((!devd(cx).rail_hidden).then(|| self.rail(cx)))
+            .on_mouse_move(cx.listener(|this, ev: &gpui::MouseMoveEvent, window, cx| {
+                if devd(cx).drag.is_some() {
+                    if ev.pressed_button == Some(gpui::MouseButton::Left) {
+                        this.drag_to(f32::from(ev.position.x), window, cx);
+                    } else {
+                        cx.global_mut::<Devd>().drag = None;
+                    }
+                }
+            }))
+            .on_mouse_up(gpui::MouseButton::Left, cx.listener(|_, _: &gpui::MouseUpEvent, _, cx| {
+                cx.global_mut::<Devd>().drag = None;
+            }))
             .child(
                 div()
                     .flex_1()
@@ -2009,5 +2090,28 @@ impl Render for Shell {
             .children(self.modal_overlay(cx))
             .children(self.decision_overlay(cx))
             .children(self.palette_overlay(cx))
+    }
+}
+
+impl Shell {
+    /// Move the edge being dragged to where the pointer is. A column keeps a width a screen can use: the list stays
+    /// readable, the pane stays usable, and the conversation always keeps what it needs.
+    fn drag_to(&mut self, x: f32, window: &Window, cx: &mut Context<Self>) {
+        use crate::state::Edge;
+        let Some((edge, from, start)) = devd(cx).drag else {
+            return;
+        };
+        let view = f32::from(window.viewport_size().width) - size::RAIL;
+        let moved = x - from;
+        let state = cx.global_mut::<Devd>();
+        match edge {
+            Edge::List | Edge::Runs => state.list_width = (start + moved).clamp(200.0, (view * 0.5).max(240.0)),
+            Edge::Pane => {
+                let most = (view - state.list_width - screens::pane::STRIP - screens::pane::CONVERSATION_MIN)
+                    .max(screens::pane::NARROWEST);
+                state.pane_width = Some((start - moved).clamp(screens::pane::NARROWEST, most));
+            }
+        }
+        cx.notify();
     }
 }

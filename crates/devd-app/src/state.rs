@@ -65,6 +65,14 @@ pub struct Devd {
     /// the wrong shape on a narrow window or while reading a long reply, and there was no way to
     /// put it away.
     pub sidebar_collapsed: bool,
+    /// How wide the conversation list is, as the person dragged it.
+    pub list_width: f32,
+    /// How wide the browser and terminal column is, once the person has dragged it. `None` is the default share.
+    pub pane_width: Option<f32>,
+    /// Whether the navigation rail is put away, so the screen has the whole window.
+    pub rail_hidden: bool,
+    /// An edge being dragged: which, where the pointer started, and the width then.
+    pub drag: Option<(Edge, f32, f32)>,
     /// Whether such a mark was drawn since the last beat. Only then is the
     /// window redrawn for the next one.
     pub live_seen: std::cell::Cell<bool>,
@@ -248,6 +256,10 @@ pub fn start(conn: Arc<Connection>, cx: &mut App) {
         beat: 0,
         beats: 0,
         sidebar_collapsed: false,
+        list_width: crate::theme::size::SIDEBAR,
+        pane_width: None,
+        rail_hidden: false,
+        drag: None,
         live_seen: std::cell::Cell::new(false),
         link_root: None,
         chat_running: std::cell::Cell::new(false),
@@ -869,4 +881,15 @@ pub fn send_call(cx: &App, capability: &'static str, args: Value) {
 /// Tell the person something once.
 pub fn push_toast(cx: &mut App, text: &str) {
     cx.global_mut::<Devd>().toasts.push(Toast::new(text, false));
+}
+
+/// An edge a person can take hold of and move.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Edge {
+    /// The right edge of the conversation list.
+    List,
+    /// The left edge of the browser and terminal column.
+    Pane,
+    /// The right edge of the list of runs.
+    Runs,
 }

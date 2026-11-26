@@ -1315,10 +1315,12 @@ fn a_team_plans_waits_for_approval_works_and_is_verified_by_evidence() {
             .any(|t| t["key"] == "final-verify" && t["state"] == "done"),
         "devd adds its own final verification"
     );
-    assert!(v["run"]["summary"]
-        .as_str()
-        .unwrap()
-        .contains("passing verification"));
+    // The summary opens with what finished and how much of it passed a check devd ran itself.
+    let summary = v["run"]["summary"].as_str().unwrap();
+    assert!(
+        summary.contains("finished;") && summary.contains("a check devd ran"),
+        "{summary}"
+    );
     let kinds: Vec<&str> = v["events"]
         .as_array()
         .unwrap()

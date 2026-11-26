@@ -9,7 +9,7 @@
 //! The browser is started only when it is asked for. Looking at this never launches a Chromium.
 
 use std::cell::Cell;
-use std::path::PathBuf;
+
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -23,7 +23,7 @@ use serde_json::{Value, json};
 
 use super::pages::{Row, list_or, read_call, text};
 use crate::shell::Shell;
-use crate::state::{Shot, devd};
+use crate::state::devd;
 use crate::theme::{Tone, mono, size, theme};
 use crate::ui::input::{InputEvent, TextInput};
 use crate::ui::{self, Button, ButtonKind, favicon};
@@ -36,14 +36,10 @@ pub struct BrowserUi {
     /// The address last copied into the box from the page, so a page that moved on by itself is followed
     /// and one the person is typing over is left alone.
     address_for: String,
-    /// What the last picture was of (tab, address, title): a different page wants a new one.
-    shot_of: String,
     /// A picture is wanted as soon as nothing else is running.
     want_shot: bool,
     /// When a scroll was last sent, so a spinning wheel is a few scrolls and not hundreds.
     scrolled: Option<Instant>,
-    /// When a key was last sent: the page has moved on a moment later, and a new picture is taken.
-    keyed: Option<Instant>,
     /// Where the picture is on screen, so a click on it can be turned into a point on the page.
     bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Where keys go while the page is being typed into.
@@ -52,6 +48,22 @@ pub struct BrowserUi {
     console: bool,
     /// Whether the page's structure is open.
     outline: bool,
+    /// The screen's scale where the page is drawn, so the page is laid out for it.
+    scale: Rc<Cell<f32>>,
+    /// The page as it is now, and its size in CSS pixels.
+    live: Option<std::sync::Arc<gpui::RenderImage>>,
+    live_size: (f32, f32),
+    /// The tab the picture is of. A frame of a tab that was closed or switched away from is never shown as the
+    /// tab that is open now.
+    live_tab: String,
+    /// What keeps the picture moving while the pane is open.
+    frames: Option<gpui::Task<()>>,
+    /// The pane size last given to the page: width, height and the scale in hundredths.
+    sized: Option<(u32, u32, u32)>,
+    /// When the pointer was last sent, so moving it is a few events a second, not one per pixel.
+    hovered: Option<Instant>,
+    /// Wheel turns not yet sent.
+    wheel: f64,
     _watch: Option<Subscription>,
 }
 
@@ -122,23 +134,9 @@ pub fn parts(shell: &mut Shell, wide: f32, cx: &mut Context<Shell>) -> Parts {
             shell.browser_ui.address_for.clear();
         }
     }
-    let page_key = format!("{tab_id}|{url}|{title}");
-    if running && !tab_id.is_empty() && page_key != shell.browser_ui.shot_of {
-        shell.browser_ui.shot_of = page_key;
-        shell.browser_ui.want_shot = true;
-    }
-    if !running {
-        shell.browser_ui.shot_of.clear();
-    }
-    // A moment after the last key, the page has reacted.
-    if shell
-        .browser_ui
-        .keyed
-        .is_some_and(|at| at.elapsed() > Duration::from_millis(500))
-    {
-        shell.browser_ui.keyed = None;
-        shell.browser_ui.want_shot = true;
-    }
+    let _ = (&tab_id, &title);
+    // The page is drawn live while the pane is open; a screenshot is taken only when asked for, as evidence.
+    keep_live(shell, running, cx);
     if running && shell.browser_ui.want_shot && devd(cx).sync.pending_mutations() == 0 {
         shell.browser_ui.want_shot = false;
         crate::state::start_write(cx, surface::browser::screenshot().mutation(), None, None);
@@ -166,23 +164,21 @@ pub fn parts(shell: &mut Shell, wide: f32, cx: &mut Context<Shell>) -> Parts {
             name,
             Some(lead),
             tab["focused"] == json!(true),
-            move |this, _, cx| {
+            move |_this, _, cx| {
                 crate::state::start_write(
                     cx,
                     surface::browser::tab_focus(&focus_id).mutation(),
                     None,
                     None,
                 );
-                this.browser_ui.want_shot = true;
             },
-            move |this, _, cx| {
+            move |_this, _, cx| {
                 crate::state::start_write(
                     cx,
                     surface::browser::tab_close(&close_id).mutation(),
                     None,
                     None,
                 );
-                this.browser_ui.want_shot = true;
             },
             cx,
         ));
@@ -201,7 +197,7 @@ pub fn parts(shell: &mut Shell, wide: f32, cx: &mut Context<Shell>) -> Parts {
     let new = super::pane::icon_button(
         "browser.tab.new",
         "plus",
-        cx.listener(move |this, _: &ClickEvent, _, cx| {
+        cx.listener(move |_this, _: &ClickEvent, _, cx| {
             let running = devd(cx)
                 .sync
                 .peek(&devd_app_core::sync::QueryKey::bare("browser.status"))
@@ -218,7 +214,6 @@ pub fn parts(shell: &mut Shell, wide: f32, cx: &mut Context<Shell>) -> Parts {
                 None,
                 None,
             );
-            this.browser_ui.want_shot = true;
         }),
         &t,
     );
@@ -229,20 +224,30 @@ pub fn parts(shell: &mut Shell, wide: f32, cx: &mut Context<Shell>) -> Parts {
             .p(px(16.0))
             .child(ui::skeleton("browser.sk", 200.0, cx))
             .into_any_element()
-    } else if !running {
+    } else if !running || tabs.is_empty() {
+        // No browser, or every tab closed: the start screen, not a page that will never arrive.
+        if let Some(old) = shell.browser_ui.live.take() {
+            cx.drop_image(old, None);
+        }
+        shell.browser_ui.live_tab.clear();
         empty(cx)
     } else {
+        // The page takes the room; the console and what the assistant sees fold under it.
         div()
+            .flex_1()
+            .min_h_0()
             .flex()
             .flex_col()
-            .child(picture(shell, wide, cx))
+            .child(picture(shell, &tab_id, cx))
             .child(panels(shell, cx))
             .into_any_element()
     };
+    let _ = wide;
     Parts {
         tabs: chips,
         new,
         body: div()
+            .size_full()
             .flex()
             .flex_col()
             .child(toolbar)
@@ -275,7 +280,7 @@ fn toolbar(shell: &Shell, running: bool, cx: &mut Context<Shell>) -> AnyElement 
             super::pane::icon_button(
                 id,
                 icon,
-                cx.listener(move |this, _: &ClickEvent, _, cx| {
+                cx.listener(move |_this, _: &ClickEvent, _, cx| {
                     if devd(cx)
                         .sync
                         .peek(&devd_app_core::sync::QueryKey::bare("browser.status"))
@@ -288,7 +293,6 @@ fn toolbar(shell: &Shell, running: bool, cx: &mut Context<Shell>) -> AnyElement 
                             None,
                             None,
                         );
-                        this.browser_ui.want_shot = true;
                     }
                 }),
                 &t,
@@ -332,28 +336,27 @@ fn toolbar(shell: &Shell, running: bool, cx: &mut Context<Shell>) -> AnyElement 
         .into_any_element()
 }
 
-/// What the page looks like now. A click on it is a click on the page, the wheel scrolls it, and keys typed on it go to it.
-fn picture(shell: &Shell, wide: f32, cx: &mut Context<Shell>) -> AnyElement {
+/// The page, live. It fills the pane, is laid out at the pane's own size (so it is read at its real size, not a
+/// desktop page shrunk into a column), and is redrawn many times a second while the pane is open. A click on it is
+/// a click on the page at the same point, the pointer moving over it is the pointer moving over the page, the wheel
+/// scrolls it as far as the wheel turned, and keys typed on it go to it.
+fn picture(shell: &Shell, tab: &str, cx: &mut Context<Shell>) -> AnyElement {
     let t = theme(cx).clone();
     let bounds = shell.browser_ui.bounds.clone();
-    let shot: Option<Shot> = devd(cx).shot.clone();
-    let home = PathBuf::from(&devd(cx).conn.home);
-    let Some(shot) = shot.filter(|s| s.width > 0.0 && s.height > 0.0) else {
-        return div()
-            .h(px(240.0))
-            .flex()
-            .items_center()
-            .justify_center()
-            .text_size(px(size::TEXT_SM))
-            .text_color(t.muted)
-            .child("Loading the page…")
-            .into_any_element();
-    };
-    let height = wide * shot.height / shot.width;
-    let (click_bounds, wheel_bounds) = (bounds.clone(), bounds.clone());
-    let (page_w, page_h) = (shot.width as f64, shot.height as f64);
+    let scale = shell.browser_ui.scale.clone();
+    // Only a picture of the tab that is open: after a tab closes or another is chosen, the old page is not left
+    // standing while the new one loads.
+    let live = shell
+        .browser_ui
+        .live
+        .clone()
+        .filter(|_| !tab.is_empty() && shell.browser_ui.live_tab == tab);
+    let (page_w, page_h) = shell.browser_ui.live_size;
+    let (click_bounds, move_bounds, wheel_bounds) = (bounds.clone(), bounds.clone(), bounds.clone());
     let focus = shell.browser_ui.focus.clone();
     let click_focus = focus.clone();
+    // A point in the pane, as a point in the page. The page is laid out at the pane's size, so this is the same
+    // point; while a resize is on its way the frame on screen is still the old size, and it is scaled to it.
     let at = move |bounds: &Rc<Cell<Option<Bounds<Pixels>>>>,
                    x: Pixels,
                    y: Pixels|
@@ -364,108 +367,236 @@ fn picture(shell: &Shell, wide: f32, cx: &mut Context<Shell>) -> AnyElement {
             return None;
         }
         let (px_x, px_y) = (f64::from(x - b.origin.x), f64::from(y - b.origin.y));
-        ((0.0..=w).contains(&px_x) && (0.0..=h).contains(&px_y))
-            .then(|| (px_x / w * page_w, px_y / h * page_h))
+        let (pw, ph) = if page_w > 0.0 && page_h > 0.0 {
+            (page_w as f64, page_h as f64)
+        } else {
+            (w, h)
+        };
+        ((0.0..=w).contains(&px_x) && (0.0..=h).contains(&px_y)).then(|| (px_x / w * pw, px_y / h * ph))
     };
     let mut view = div()
         .id("browser.picture")
         .key_context("Terminal")
         .relative()
         .w_full()
-        .h(px(height))
+        .flex_1()
+        .min_h(px(200.0))
         .bg(gpui::rgb(0xffffff))
         .overflow_hidden()
         .cursor_pointer();
     if let Some(f) = &focus {
         view = view.track_focus(f);
     }
-    view.child(
-        img(home.join("uploads").join(&shot.file))
+    let shown: AnyElement = match live {
+        Some(frame) => img(gpui::ImageSource::Render(frame))
             .size_full()
-            .object_fit(ObjectFit::Fill),
-    )
-    .child(
-        canvas(move |b, _, _| bounds.set(Some(b)), |_, _, _, _| {})
+            .object_fit(ObjectFit::Fill)
+            .into_any_element(),
+        None => div()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(t.bg)
+            .text_size(px(size::TEXT_SM))
+            .text_color(t.muted)
+            .child("Loading the page…")
+            .into_any_element(),
+    };
+    view.child(shown)
+        .child(
+            canvas(
+                move |b, window, _| {
+                    bounds.set(Some(b));
+                    scale.set(window.scale_factor());
+                },
+                |_, _, _, _| {},
+            )
+            // Pinned to the corner: an absolute box with no inset sits where it would have flowed, below the page,
+            // and every point in the page then measured as outside it.
             .absolute()
+            .top_0()
+            .left_0()
             .size_full(),
-    )
-    .on_mouse_down(
-        MouseButton::Left,
-        cx.listener(move |this, ev: &MouseDownEvent, window, cx| {
-            if let Some(f) = &click_focus {
-                window.focus(f);
+        )
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |_this, ev: &MouseDownEvent, window, cx| {
+                if let Some(f) = &click_focus {
+                    window.focus(f);
+                }
+                if let Some((x, y)) = at(&click_bounds, ev.position.x, ev.position.y) {
+                    crate::state::send_call(cx, "browser.mouse", json!({ "x": x, "y": y }));
+                    cx.notify();
+                }
+            }),
+        )
+        .on_mouse_move(cx.listener(move |this, ev: &gpui::MouseMoveEvent, _, cx| {
+            // Hover answers within a frame or two; the pointer is sent at most every 50ms, not every pixel.
+            let due = this
+                .browser_ui
+                .hovered
+                .is_none_or(|last| last.elapsed() > Duration::from_millis(50));
+            if due && let Some((x, y)) = at(&move_bounds, ev.position.x, ev.position.y) {
+                this.browser_ui.hovered = Some(Instant::now());
+                crate::state::send_call(cx, "browser.hover", json!({ "x": x, "y": y }));
             }
-            if let Some((x, y)) = at(&click_bounds, ev.position.x, ev.position.y) {
-                crate::state::start_write(cx, surface::browser::mouse(x, y).mutation(), None, None);
-                this.browser_ui.want_shot = true;
-                cx.notify();
+        }))
+        .on_scroll_wheel(cx.listener(move |this, ev: &ScrollWheelEvent, window, cx| {
+            // As far as the wheel turned, at the pointer, like a browser: the turns that arrive within 40ms are one
+            // scroll, so a fast wheel or a touchpad is a few scrolls and not hundreds, and none of it is lost.
+            let step = -f64::from(ev.delta.pixel_delta(window.line_height()).y);
+            this.browser_ui.wheel += step;
+            let due = this
+                .browser_ui
+                .scrolled
+                .is_none_or(|last| last.elapsed() > Duration::from_millis(40));
+            if due
+                && this.browser_ui.wheel != 0.0
+                && let Some((x, y)) = at(&wheel_bounds, ev.position.x, ev.position.y)
+            {
+                let delta = this.browser_ui.wheel;
+                this.browser_ui.wheel = 0.0;
+                this.browser_ui.scrolled = Some(Instant::now());
+                crate::state::send_call(cx, "browser.scroll", json!({ "x": x, "y": y, "delta_y": delta }));
             }
-        }),
-    )
-    .on_scroll_wheel(cx.listener(move |this, ev: &ScrollWheelEvent, _, cx| {
-        let quiet = this
-            .browser_ui
-            .scrolled
-            .is_none_or(|last| last.elapsed() > Duration::from_millis(250));
-        if quiet && wheel_bounds.get().is_some() {
-            this.browser_ui.scrolled = Some(Instant::now());
-            // A wheel that scrolls content down reports a negative step.
-            let step = -f64::from(ev.delta.pixel_delta(px(40.0)).y);
-            let step = if step == 0.0 {
-                0.0
-            } else {
-                step.signum() * step.abs().clamp(80.0, 600.0)
-            };
-            crate::state::start_write(
-                cx,
-                surface::browser::scroll(page_w / 2.0, page_h / 2.0, step).mutation(),
-                None,
-                None,
-            );
-            this.browser_ui.want_shot = true;
-        }
-    }))
-    .on_key_down(cx.listener(move |this, ev: &KeyDownEvent, _, cx| {
-        let k = &ev.keystroke;
-        let named = match k.key.as_str() {
-            "enter" => Some("Enter"),
-            "tab" => Some("Tab"),
-            "backspace" => Some("Backspace"),
-            "escape" => Some("Escape"),
-            "up" => Some("ArrowUp"),
-            "down" => Some("ArrowDown"),
-            "left" => Some("ArrowLeft"),
-            "right" => Some("ArrowRight"),
-            "delete" => Some("Delete"),
-            "home" => Some("Home"),
-            "end" => Some("End"),
-            "pageup" => Some("PageUp"),
-            "pagedown" => Some("PageDown"),
-            _ => None,
-        };
-        let call = if k.modifiers.control && k.key == "v" {
-            cx.read_from_clipboard()
-                .and_then(|c| c.text())
-                .map(|words| ("browser.key", json!({ "text": words })))
-        } else if let Some(name) = named {
-            Some(("browser.key", json!({ "key": name })))
-        } else if k.key == "space" {
-            Some(("browser.key", json!({ "text": " " })))
-        } else if !k.modifiers.control && !k.modifiers.alt {
-            k.key_char
-                .as_deref()
-                .filter(|c| !c.is_empty())
-                .map(|c| ("browser.key", json!({ "text": c })))
-        } else {
-            None
-        };
-        if let Some((capability, args)) = call {
-            crate::state::send_call(cx, capability, args);
-            this.browser_ui.keyed = Some(Instant::now());
             cx.stop_propagation();
+        }))
+        .on_key_down(cx.listener(move |_this, ev: &KeyDownEvent, _, cx| {
+            let k = &ev.keystroke;
+            let named = match k.key.as_str() {
+                "enter" => Some("Enter"),
+                "tab" => Some("Tab"),
+                "backspace" => Some("Backspace"),
+                "escape" => Some("Escape"),
+                "up" => Some("ArrowUp"),
+                "down" => Some("ArrowDown"),
+                "left" => Some("ArrowLeft"),
+                "right" => Some("ArrowRight"),
+                "delete" => Some("Delete"),
+                "home" => Some("Home"),
+                "end" => Some("End"),
+                "pageup" => Some("PageUp"),
+                "pagedown" => Some("PageDown"),
+                _ => None,
+            };
+            let call = if k.modifiers.control && k.key == "v" {
+                cx.read_from_clipboard()
+                    .and_then(|c| c.text())
+                    .map(|words| ("browser.key", json!({ "text": words })))
+            } else if let Some(name) = named {
+                Some(("browser.key", json!({ "key": name })))
+            } else if k.key == "space" {
+                Some(("browser.key", json!({ "text": " " })))
+            } else if !k.modifiers.control && !k.modifiers.alt {
+                k.key_char
+                    .as_deref()
+                    .filter(|c| !c.is_empty())
+                    .map(|c| ("browser.key", json!({ "text": c })))
+            } else {
+                None
+            };
+            if let Some((capability, args)) = call {
+                crate::state::send_call(cx, capability, args);
+                cx.stop_propagation();
+            }
+        }))
+        .into_any_element()
+}
+
+/// Keep the page laid out at the pane's size and its picture moving, while the pane is open and the browser runs.
+///
+/// A frame is asked for, decoded off the window's thread, and drawn; then the next, about eight a second. The frame
+/// before is taken off the GPU as the next replaces it, so a pane left open all day holds two pictures, not
+/// thousands. When the pane closes the loop ends and pages get the browser's own window back.
+fn keep_live(shell: &mut Shell, running: bool, cx: &mut Context<Shell>) {
+    if !running {
+        return;
+    }
+    // The pane's size, once it has been drawn, as the page's size.
+    if let Some(b) = shell.browser_ui.bounds.get() {
+        let scale = shell.browser_ui.scale.get().max(1.0);
+        let size = (
+            f32::from(b.size.width).round() as u32,
+            f32::from(b.size.height).round() as u32,
+            (scale * 100.0).round() as u32,
+        );
+        if size.0 >= 200 && size.1 >= 150 && shell.browser_ui.sized != Some(size) {
+            shell.browser_ui.sized = Some(size);
+            crate::state::send_call(
+                cx,
+                "browser.viewport",
+                json!({ "width": size.0, "height": size.1, "scale": size.2 as f64 / 100.0 }),
+            );
         }
-    }))
-    .into_any_element()
+    }
+    if shell.browser_ui.frames.is_some() {
+        return;
+    }
+    let conn = devd(cx).conn.clone();
+    shell.browser_ui.frames = Some(cx.spawn(async move |this, cx| {
+        loop {
+            let conn = conn.clone();
+            let got = cx
+                .background_spawn(async move { next_frame(&*conn) })
+                .await;
+            let go_on = this
+                .update(cx, |this, cx| {
+                    if !this.pane.browser {
+                        // The pane closed: stop drawing, and give pages their own window back.
+                        this.browser_ui.frames = None;
+                        this.browser_ui.sized = None;
+                        crate::state::send_call(cx, "browser.viewport", json!({}));
+                        if let Some(old) = this.browser_ui.live.take() {
+                            cx.drop_image(old, None);
+                        }
+                        return false;
+                    }
+                    if let Some((image, width, height, tab)) = got {
+                        if let Some(old) = this.browser_ui.live.replace(image) {
+                            cx.drop_image(old, None);
+                        }
+                        this.browser_ui.live_size = (width, height);
+                        this.browser_ui.live_tab = tab;
+                        cx.notify();
+                    }
+                    true
+                })
+                .unwrap_or(false);
+            if !go_on {
+                break;
+            }
+            cx.background_executor()
+                .timer(Duration::from_millis(120))
+                .await;
+        }
+    }));
+}
+
+/// Ask devd for a frame and decode it into a picture the GPU draws: its pixels, and the page's size in CSS pixels.
+fn next_frame(
+    backend: &dyn devd_app_core::sync::Backend,
+) -> Option<(std::sync::Arc<gpui::RenderImage>, f32, f32, String)> {
+    let reply = backend.invoke("browser.frame", &json!({})).ok()?;
+    let value = match reply {
+        devd_app_core::sync::Reply::Done(value) => value,
+        _ => return None,
+    };
+    let path = value["path"].as_str()?;
+    let bytes = std::fs::read(path).ok()?;
+    let mut rgba = image::load_from_memory_with_format(&bytes, image::ImageFormat::Jpeg)
+        .ok()?
+        .into_rgba8();
+    // The GPU takes its pixels blue-first, as gpui's own loader gives them.
+    for pixel in rgba.as_chunks_mut::<4>().0 {
+        pixel.swap(0, 2);
+    }
+    let (px_w, px_h) = (rgba.width() as f32, rgba.height() as f32);
+    let width = value["width"].as_f64().filter(|w| *w > 0.0).map_or(px_w, |w| w as f32);
+    let height = value["height"].as_f64().filter(|h| *h > 0.0).map_or(px_h, |h| h as f32);
+    let frame = image::Frame::new(rgba);
+    let tab = value["tab"].as_str().unwrap_or_default().to_string();
+    Some((std::sync::Arc::new(gpui::RenderImage::new([frame])), width, height, tab))
 }
 
 /// The console and the page as the assistant reads it, below the page.
@@ -623,14 +754,21 @@ impl Shell {
             } else {
                 format!("https://{address}")
             };
-            // The first load starts the browser; later ones navigate the tab on screen.
-            let running = devd(cx)
+            // The first load starts the browser; later ones navigate the tab on screen, and with every tab closed a
+            // new tab opens on the address instead of a navigation that has no tab to go to.
+            let status = devd(cx)
                 .sync
                 .peek(&devd_app_core::sync::QueryKey::bare("browser.status"))
-                .and_then(|s| s.data.as_deref().map(|d| d["running"] == json!(true)))
+                .and_then(|s| s.data.as_deref().cloned());
+            let running = status.as_ref().is_some_and(|d| d["running"] == json!(true));
+            let has_tab = status
+                .as_ref()
+                .and_then(|d| d["tabs"].as_array().map(|t| !t.is_empty()))
                 .unwrap_or(false);
-            if running {
+            if running && has_tab {
                 surface::browser::navigate(&url)
+            } else if running {
+                surface::browser::tab_open(Some(&url))
             } else {
                 surface::browser::open(Some(&url))
             }
@@ -641,7 +779,6 @@ impl Shell {
             Some("Loading the page…".to_string()),
             None,
         );
-        self.browser_ui.want_shot = true;
         devd(cx).sync.invalidate("browser");
         cx.notify();
     }

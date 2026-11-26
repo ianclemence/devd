@@ -515,6 +515,9 @@ fn duration(seconds: Option<i64>) -> String {
 fn role_name(id: &str) -> String {
     id.split(['-', '_'])
         .map(|part| {
+            if part.eq_ignore_ascii_case("qa") {
+                return "QA".to_string();
+            }
             let mut chars = part.chars();
             match chars.next() {
                 Some(first) => first.to_uppercase().chain(chars).collect::<String>(),
@@ -635,7 +638,7 @@ fn model_performance(rows: &[Scorecard], cx: &App) -> Div {
                 row.errors
             )
         } else {
-            format!("{} tokens · {} tasks", ui::compact(row.tokens), row.tasks)
+            format!("{} tokens · {}", ui::compact(row.tokens), ui::counted(row.tasks as u64, "task"))
         };
         if row.tasks > 0 {
             if let Some(score) = row.score {
@@ -791,7 +794,7 @@ fn agent_performance(rows: &[Scorecard], cx: &App) -> Div {
             .rank
             .map(|n| format!("#{n}"))
             .unwrap_or_else(|| "—".to_string());
-        let mut sub = format!("{} tasks", row.tasks);
+        let mut sub = ui::counted(row.tasks as u64, "task");
         if let Some(score) = row.score {
             sub.push_str(&format!(" · score {score:.0}"));
         }
@@ -966,7 +969,7 @@ pub fn render(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
                 .flex_col()
                 .gap(px(8.0))
                 .child(eyebrow("MODEL PERFORMANCE", cx))
-                .child(div().text_size(px(size::TEXT_XS)).text_color(t.faint).child("Accepted on proof, checks passed, work redone and what it cost. Three finished tasks make a model rankable; below that the record is shown but not ranked."))
+                .child(div().text_size(px(size::TEXT_XS)).text_color(t.faint).child("Ranked by work accepted on proof, checks passed, rework and cost. A model is ranked after three finished tasks; before that its record is shown unranked."))
                 .child(model_performance(&model_rows, cx)),
         );
     }

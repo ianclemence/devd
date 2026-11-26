@@ -33,19 +33,30 @@ pub fn render(shell: &mut Shell, _window: &mut Window, cx: &mut Context<Shell>) 
         12..=17 => "Good afternoon.",
         _ => "Good evening.",
     };
-    let open: Vec<&Value> = inbox
+    // The same split the Inbox makes: a decision is waiting for you, a finished run is news. Six finished runs used
+    // to read "6 things are waiting for you" while the Inbox said nothing needed a decision.
+    let needs_you = |m: &Value| {
+        devd_app_core::status::inbox(m["kind"].as_str().unwrap_or_default(), true).needs_you
+    };
+    let mut open: Vec<&Value> = inbox
         .list("")
         .iter()
         .filter(|m| m["state"] == json!("open"))
         .collect();
-    let headline = match (open.len(), health.data.as_deref()) {
-        (0, Some(data)) => data["headline"]
+    // Decisions first: they are what the list is for.
+    open.sort_by_key(|m| !needs_you(m));
+    let decisions = open.iter().filter(|m| needs_you(m)).count();
+    let news = open.len() - decisions;
+    let headline = match (decisions, news, health.data.as_deref()) {
+        (0, 0, Some(data)) => data["headline"]
             .as_str()
             .unwrap_or("Everything is in order.")
             .to_string(),
-        (0, None) => "Reading the machine…".to_string(),
-        (1, _) => "One thing is waiting for you.".to_string(),
-        (n, _) => format!("{n} things are waiting for you."),
+        (0, 0, None) => "Reading the machine…".to_string(),
+        (0, 1, _) => "Nothing needs you. One update to read.".to_string(),
+        (0, n, _) => format!("Nothing needs you. {n} updates to read."),
+        (1, _, _) => "One thing needs you.".to_string(),
+        (n, _, _) => format!("{n} things need you."),
     };
 
     let mut column = div().flex().flex_col().gap(px(26.0));
@@ -142,7 +153,7 @@ pub fn render(shell: &mut Shell, _window: &mut Window, cx: &mut Context<Shell>) 
                 .flex()
                 .flex_col()
                 .gap(px(8.0))
-                .child(eyebrow("NEEDS YOU", cx))
+                .child(eyebrow(if decisions > 0 { "NEEDS YOU" } else { "LATELY" }, cx))
                 .child(list),
         );
     }

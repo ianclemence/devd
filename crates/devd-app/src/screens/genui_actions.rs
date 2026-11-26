@@ -114,7 +114,7 @@ impl Shell {
             format!("{summary}.\n")
         };
         let body = format!(
-            "The assistant offered this. It will run `{capability}`.\n{what}Kind of action: {tier}.{shown}"
+            "The assistant offered this. It will run {capability}.\n{what}Kind of action: {tier}.{shown}"
         );
         let danger = matches!(tier.as_str(), "destructive" | "admin");
         let title = if label.is_empty() {

@@ -165,13 +165,15 @@ fn paragraphs(text: &str, limit: usize, colour: Hsla) -> Div {
 /// The screen.
 pub fn render(shell: &mut Shell, selected: Option<String>, cx: &mut Context<Shell>) -> AnyElement {
     let t = theme(cx).clone();
+    // No run chosen is not a blank page: the one that wants you comes first, then the one working, then the newest.
+    let selected = selected.or_else(|| first_to_read(cx));
     let detail: AnyElement = match selected {
         None => div()
             .flex_1()
             .child(ui::empty(
                 "runs",
-                "Choose a run",
-                "What it is doing, what it has cost, and who is working on what.",
+                "No runs yet",
+                "Hand the team a goal from a conversation, and its run appears here with who is working on what.",
                 cx,
             ))
             .into_any_element(),
@@ -410,8 +412,11 @@ fn list(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
             )
         })),
     );
+    let wide = cx.global::<crate::state::Devd>().list_width + 40.0;
+    let grip = ui::grip("runs.grip", crate::state::Edge::Runs, wide - 40.0, false, cx);
     div()
-        .w(px(size::SIDEBAR + 40.0))
+        .w(px(wide))
+        .relative()
         .h_full()
         .flex()
         .flex_col()
@@ -446,6 +451,7 @@ fn list(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
                 .child(column),
         )
         .child(clear)
+        .child(grip)
         .into_any_element()
 }
 
@@ -631,7 +637,9 @@ fn recreate_card(id: &str, cx: &mut Context<Shell>) -> Option<AnyElement> {
             .text_size(px(size::TEXT_XS))
             .text_color(t.faint)
             .child(format!(
-                "{captures} capture(s) · {checks} comparison(s){}",
+                "{} · {}{}",
+                ui::counted(captures, "capture"),
+                ui::counted(checks, "comparison"),
                 if missing.is_empty() {
                     String::new()
                 } else {
@@ -766,6 +774,7 @@ fn heading(
         }
         _ => {}
     }
+    let mut delete = None;
     if !over(&state) {
         let cancel = run_id.clone();
         actions = actions.child(div().id("run.cancel.wrap").tooltip(ui::tip("Cancel the run")).child(Button::icon_only("run.cancel", "stop").on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
@@ -776,7 +785,7 @@ fn heading(
             run_id.clone(),
             run["title"].as_str().unwrap_or("this run").to_string(),
         );
-        actions = actions.child(
+        delete = Some(
             div()
                 .id("run.delete.wrap")
                 .tooltip(ui::tip("Delete the run"))
@@ -803,6 +812,8 @@ fn heading(
                 ),
         );
     }
+    // Deleting is last: the actions that keep the run read first, and the one that removes it sits at the end.
+    actions = actions.children(delete);
     div()
         .flex()
         .items_start()
@@ -1009,15 +1020,74 @@ fn result(run: &Value, tasks: &[Value], cx: &mut Context<Shell>) -> Option<AnyEl
         body = body.child(line);
     }
     if let Some(summary) = summary {
-        let blocks = devd_app_core::markdown::parse(summary);
+        let summary = without_byte_counts(summary);
+        // The headline is what a person reads; the long report (every task, every open criterion, the lessons) is
+        // there on request. Open, it was a wall of bullets that pushed the team and its tasks off the screen.
+        let cut = summary
+            .split_inclusive('\n')
+            .scan(0, |at, line| {
+                let start = *at;
+                *at += line.len();
+                Some((start, line))
+            })
+            .find(|(start, line)| *start > 0 && (line.trim().is_empty() || line.trim_start().starts_with(['-', '*', '•'])))
+            .map(|(start, _)| start);
+        let (head, rest) = match cut {
+            Some(at) if !summary[at..].trim().is_empty() => (summary[..at].trim().to_string(), Some(summary[at..].to_string())),
+            _ => (summary.clone(), None),
+        };
+        let key = format!("run.report:{}", run["id"].as_str().unwrap_or_default());
+        let open = cx.global::<crate::state::Devd>().open_steps.contains(&key);
+        let shown = if open { summary.clone() } else { head };
+        let blocks = devd_app_core::markdown::parse(&shown);
         body = body.child(
             div()
                 .text_size(px(size::TEXT_MD))
                 .line_height(px(22.0))
                 .child(ui::markdown::document("run.summary", &blocks, cx)),
         );
+        if rest.is_some() {
+            let toggle = key.clone();
+            body = body.child(
+                Button::new("run.report.toggle", if open { "Hide the full report" } else { "Show the full report" })
+                    .kind(ButtonKind::Ghost)
+                    .icon(if open { "chevron-up" } else { "chevron-down" })
+                    .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                        let state = cx.global_mut::<crate::state::Devd>();
+                        if !state.open_steps.remove(&toggle) {
+                            state.open_steps.insert(toggle.clone());
+                        }
+                        cx.notify();
+                    })),
+            );
+        }
     }
     Some(section("RESULT", None, body.into_any_element(), cx))
+}
+
+/// A report with its cut marks said as a person would: "... [truncated 4613 bytes]" is a note from the program to
+/// itself, and a person reads it as an error. The cut stays visible as an ellipsis; the whole report is in the task.
+fn without_byte_counts(text: &str) -> String {
+    const MARK: &str = "... [truncated ";
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(MARK) {
+        let after = &rest[at + MARK.len()..];
+        let digits = after.chars().take_while(char::is_ascii_digit).count();
+        match after[digits..].strip_prefix(" bytes]") {
+            Some(tail) if digits > 0 => {
+                out.push_str(&rest[..at]);
+                out.push('…');
+                rest = tail;
+            }
+            _ => {
+                out.push_str(&rest[..at + MARK.len()]);
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// The definition of done, as a checklist: each line with what the final check found, or that it has not been checked yet.
@@ -1520,7 +1590,7 @@ fn agent_panel(run_id: &str, task: &Value, data: &Value, cx: &mut Context<Shell>
 
     // What it was asked.
     column = column.child(block(
-        "ITS BRIEF",
+        "BRIEF",
         paragraphs(
             task["instructions"].as_str().unwrap_or_default(),
             900,
@@ -1651,7 +1721,7 @@ fn agent_panel(run_id: &str, task: &Value, data: &Value, cx: &mut Context<Shell>
         .or(task["result"].as_str())
         .filter(|s| !s.is_empty())
     {
-        column = column.child(block("ITS REPORT", paragraphs(summary, 1200, t.muted)));
+        column = column.child(block("REPORT", paragraphs(summary, 1200, t.muted)));
     }
 
     // What it cost: its conversation's own usage.
@@ -1674,9 +1744,9 @@ fn agent_panel(run_id: &str, task: &Value, data: &Value, cx: &mut Context<Shell>
                     .text_size(px(size::TEXT_SM))
                     .text_color(t.muted)
                     .child(format!(
-                        "{cost}{} tokens  ·  {} attempts",
+                        "{cost}{} tokens  ·  {}",
                         ui::compact(tokens),
-                        task["attempts"].as_u64().unwrap_or(1)
+                        ui::counted(task["attempts"].as_u64().unwrap_or(1), "attempt")
                     )),
             ));
         }
@@ -1714,4 +1784,33 @@ fn title_of(run: &Value) -> String {
         kept = &kept[..open];
     }
     format!("{}…", kept.trim_end_matches(|c: char| c.is_whitespace() || matches!(c, ',' | ';' | ':' | '(' | '-')))
+}
+
+/// The run to open when none is chosen: one that needs a person, else one still working, else the newest.
+fn first_to_read(cx: &mut Context<Shell>) -> Option<String> {
+    let snap = devd(cx).sync.watch(&q::runs());
+    let runs = snap.list("");
+    let pick = |wanted: &dyn Fn(&str) -> bool| {
+        runs.iter()
+            .find(|r| wanted(r["state"].as_str().unwrap_or_default()))
+            .and_then(|r| r["id"].as_str().map(str::to_string))
+    };
+    pick(&needs_you)
+        .or_else(|| pick(&working))
+        .or_else(|| runs.first().and_then(|r| r["id"].as_str().map(str::to_string)))
+}
+
+#[cfg(test)]
+mod byte_count_tests {
+    use super::without_byte_counts;
+
+    #[test]
+    fn a_cut_report_ends_in_an_ellipsis_not_a_byte_count() {
+        assert_eq!(
+            without_byte_counts("tests pass... [truncated 4613 bytes]\n\nNext"),
+            "tests pass…\n\nNext"
+        );
+        assert_eq!(without_byte_counts("a... [truncated x bytes]"), "a... [truncated x bytes]");
+        assert_eq!(without_byte_counts("nothing cut"), "nothing cut");
+    }
 }

@@ -146,9 +146,18 @@ pub fn classify_script(name: &str, body: &str) -> (String, Risk, bool) {
     if leaves_the_project(&b).is_some() {
         return ("script".into(), Risk::Destructive, false);
     }
-    let destructive = Regex::new(r"(drop|reset|wipe|destroy|purge|nuke|deploy|publish|release|rm -rf|migrate:fresh|--force|truncate|clean:all|db:push)")
+    // The words are looked for in the name and in the body's words, not in its flags: `cargo build --release`
+    // builds an optimised binary, and reading the flag as "release" called the project's own build destructive.
+    // The flags that do destroy are looked for in the whole body.
+    let words: String = b
+        .split_whitespace()
+        .filter(|w| !w.starts_with('-'))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let destructive = Regex::new(r"(drop|reset|wipe|destroy|purge|nuke|deploy|publish|release|migrate:fresh|truncate|clean:all|db:push)")
         .unwrap()
-        .is_match(&format!("{n} {b}"));
+        .is_match(&format!("{n} {words}"))
+        || Regex::new(r"(rm\s+-[a-z]*[rf][a-z]*[rf]|--force)").unwrap().is_match(&b);
     let risk = if destructive {
         Risk::Destructive
     } else {
@@ -874,6 +883,13 @@ mod tests {
             Risk::Destructive
         );
         assert_eq!(classify_script("whatever", "node x.js").1, Risk::Mutating);
+        // A flag is not a word: an optimised build is still a build.
+        assert_eq!(classify_script("build", "cargo build --release").1, Risk::Safe);
+        assert_eq!(classify_script("build:cli", "cargo build -p kata-cli --release").1, Risk::Safe);
+        // The flags that do destroy still count, and so does a release named as such.
+        assert_eq!(classify_script("build", "rm -fr dist && tsc").1, Risk::Destructive);
+        assert_eq!(classify_script("push", "git push --force").1, Risk::Destructive);
+        assert_eq!(classify_script("release", "npm version patch").1, Risk::Destructive);
     }
 
     /// A script that reaches for the machine's own tooling is destructive however it is named, and

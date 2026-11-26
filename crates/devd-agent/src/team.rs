@@ -840,6 +840,21 @@ impl Team {
                 let text = format!("{subject}\n\n{body}");
                 let _ = self.ctx.store.queue_report(&run.id, thread, kind, &text);
                 self.ask_assistant_to_report(thread, &run.title, kind, &text);
+                // A finished run is also news in the Inbox. The conversation is where it is explained, but a person
+                // who has left it must still be told the work is done. News needs no answer, so it does not repeat a
+                // decision the conversation is already asking for.
+                if kind == "finished" {
+                    let _ = self.ctx.store.post_inbox_origin(
+                        "agent:devd-team",
+                        run.project.as_deref(),
+                        Some(&run.id),
+                        None,
+                        Some(kind),
+                        subject,
+                        body,
+                        false,
+                    );
+                }
             }
             None => {
                 let _ = self.ctx.store.post_inbox_origin(
@@ -4092,10 +4107,16 @@ impl Team {
         } else {
             ""
         };
+        // Said as a sentence: "7 tasks finished; 6 passed a check devd ran.", not "7 task(s) finished, 6 with a passing
+        // verification run recorded by devd." This line is the first thing a person reads about a finished run.
         let summary = format!(
-            "{} task(s) finished, {} with a passing verification run recorded by devd.{}\n{}{}{}{}",
-            real.len(),
-            verified,
+            "{} finished; {} a check devd ran.{}\n{}{}{}{}",
+            if real.len() == 1 { "1 task".to_string() } else { format!("{} tasks", real.len()) },
+            match verified {
+                0 => "none passed".to_string(),
+                n if n == real.len() => if n == 1 { "it passed".to_string() } else { "all passed".to_string() },
+                n => format!("{n} passed"),
+            },
             if by_hand.is_empty() {
                 String::new()
             } else {

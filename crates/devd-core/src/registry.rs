@@ -66,6 +66,8 @@ const ROUTINE_READS: &[&str] = &[
     "chat.get",
     "stacks.list",
     "stack.list",
+    // The Browser pane asks which tabs are open every time it draws; 43,000 rows of it buried the real record.
+    "browser.status",
 ];
 
 fn is_routine_read(cap: &Capability, ctx: &Ctx) -> bool {
@@ -443,7 +445,12 @@ impl Registry {
         // types, which can be a password at a prompt, and it is called once per key:
         // recording it would store secrets in the clear and bury every real change
         // under thousands of rows. Starting and closing a terminal are still audited.
-        if matches!(cap.id.as_str(), "terminal.write" | "terminal.resize") {
+        // The Browser pane's live view is the same kind of thing: a frame many times a second, the pointer moving,
+        // the pane being resized. What a person clicks and types in a page is still recorded.
+        if matches!(
+            cap.id.as_str(),
+            "terminal.write" | "terminal.resize" | "browser.frame" | "browser.hover" | "browser.viewport"
+        ) {
             return;
         }
         // A window refreshing a list is not an event. Mutations, agent calls,

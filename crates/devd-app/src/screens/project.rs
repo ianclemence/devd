@@ -867,6 +867,13 @@ fn overview(
             ..Row::default()
         });
     }
+    // "Pushed" is only true where there is somewhere to push to; a branch with no upstream is committed and local.
+    let has_upstream = d.is_some_and(|d| d["upstream"].as_str().is_some());
+    let all_clear = if has_upstream {
+        "Nothing needs you here. Everything is committed and pushed."
+    } else {
+        "Nothing needs you here. Everything is committed; this branch is not published anywhere."
+    };
     let needs_card = if needs.is_empty() && !status.is_first_load() {
         card(cx).p(px(14.0)).child(
             div()
@@ -874,11 +881,7 @@ fn overview(
                 .items_center()
                 .gap(px(10.0))
                 .child(ui::dot(Tone::Ok, cx))
-                .child(
-                    div()
-                        .text_size(px(size::TEXT))
-                        .child("Nothing needs you here. Everything is committed and pushed."),
-                ),
+                .child(div().text_size(px(size::TEXT)).child(all_clear)),
         )
     } else {
         list_or(
@@ -1235,6 +1238,7 @@ fn is_markdown(rel: &str) -> bool {
 
 /// The buttons every view of a file has: ask about it, rename it, delete it, copy its path, open it elsewhere.
 fn file_actions(dir: &str, rel: &str, cx: &mut Context<Shell>) -> Div {
+    let t = theme(cx).clone();
     let abs = join(dir, rel);
     let (outside, copy, ask, renamed) = (
         abs.clone(),
@@ -1269,16 +1273,6 @@ fn file_actions(dir: &str, rel: &str, cx: &mut Context<Shell>) -> Div {
                     )
                 })),
         )
-        .child(act_button(
-            ElementId::Name("file.delete".into()),
-            Act::new("Delete", "fs.delete", surface::files::delete(&abs).args).ask(
-                format!("Delete {}?", leaf(rel)),
-                "devd keeps a copy of the file first, so it can be restored from Activity.",
-                "Delete file",
-            ),
-            ButtonKind::Ghost,
-            cx,
-        ))
         .child(
             Button::icon_only("file.copy", "copy").on_click(move |_, _, cx| {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(copy.clone()))
@@ -1289,6 +1283,19 @@ fn file_actions(dir: &str, rel: &str, cx: &mut Context<Shell>) -> Div {
                 let _ = open::that(&outside);
             }),
         )
+        // Delete last, past a hairline, and looking like what it does: beside Rename in the same quiet style it was
+        // one slip of the pointer from the everyday actions.
+        .child(div().w(px(1.0)).h(px(16.0)).mx(px(4.0)).bg(t.line))
+        .child(act_button(
+            ElementId::Name("file.delete".into()),
+            Act::new("Delete", "fs.delete", surface::files::delete(&abs).args).ask(
+                format!("Delete {}?", leaf(rel)),
+                "devd keeps a copy of the file first, so it can be restored from Activity.",
+                "Delete file",
+            ),
+            ButtonKind::Danger,
+            cx,
+        ))
 }
 
 fn file_view(dir: &str, rel: &str, view: &ProjectView, cx: &mut Context<Shell>) -> Div {
@@ -1381,7 +1388,7 @@ fn file_view(dir: &str, rel: &str, view: &ProjectView, cx: &mut Context<Shell>) 
             .join("\n");
         let blocks = devd_app_core::markdown::parse(&source);
         let drawn = ui::markdown::document("file.md", &blocks, cx);
-        let note = (data["truncated"] == json!(true)).then(|| div().pt(px(12.0)).text_size(px(size::TEXT_SM)).text_color(t.muted).child("This preview stops where the file's first 4000 lines end. Switch to Source to read on."));
+        let note = (data["truncated"] == json!(true)).then(|| div().pt(px(12.0)).text_size(px(size::TEXT_SM)).text_color(t.muted).child("This preview shows the first 4,000 lines. Switch to Source to read the rest."));
         return div().child(head).child(
             div()
                 .id("file.preview")
@@ -2357,6 +2364,9 @@ fn run(dir: &str, cx: &mut Context<Shell>) -> AnyElement {
     let mut rows = Vec::new();
     for task in tasks.list("") {
         let (id, title, command) = (text(task, "id"), text(task, "title"), text(task, "command"));
+        // A task's title is written for an agent as well as a person and quotes a script in backticks; on a row
+        // they were drawn as backticks.
+        let title = title.replace('`', "");
         let available = task["available"] != json!(false);
         let risk = text(task, "risk");
         let long = task["long_running"] == json!(true);
@@ -2524,7 +2534,9 @@ fn team(dir: &str, cx: &mut Context<Shell>) -> AnyElement {
             ],
             busy: None,
         },
-        ButtonKind::Primary,
+        // A section's own action, beside a section heading: secondary, like the other sections' actions. Coral is
+        // for the one thing a screen is asking you to do.
+        ButtonKind::Secondary,
         cx,
     );
     let review_rows: Vec<Row> = reviews
@@ -2576,11 +2588,13 @@ fn team(dir: &str, cx: &mut Context<Shell>) -> AnyElement {
     let memory_card = if facts.trim().is_empty() {
         card(cx).p(px(14.0)).child(div().text_size(px(size::TEXT_SM)).text_color(t.muted).child("Nothing is remembered about this project yet. As the team works on it, what it learns is proposed here and kept once you agree."))
     } else {
+        // The memory is Markdown; shown as text it read "# Facts" with the hash.
+        let blocks = devd_app_core::markdown::parse(&facts);
         card(cx).p(px(14.0)).child(
             div()
                 .text_size(px(size::TEXT_SM))
                 .line_height(px(20.0))
-                .child(facts),
+                .child(ui::markdown::document("team.memory", &blocks, cx)),
         )
     };
     div()
