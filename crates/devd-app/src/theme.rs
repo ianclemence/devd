@@ -462,16 +462,6 @@ pub fn art_path(pattern: Pattern, base: [u8; 3], glint: [u8; 3], origin: &str, s
     format!("art/scene/{name}-{}-{}.png", hex(base), hex(glint))
 }
 
-/// Which corner a picture is drawn in, from its path: the left side, and the bottom. A scene without a corner of its own
-/// in its path stands where the scene does.
-pub fn art_corner(art: &str, pattern: Pattern) -> (bool, bool) {
-    let name = art.strip_prefix("art/scene/").and_then(|p| p.split('-').next()).unwrap_or_default();
-    match name.split('~').skip(1).find(|t| matches!(*t, "tr" | "tl" | "br" | "bl")) {
-        Some(code) => (code.ends_with('l'), code.starts_with('b')),
-        None => (false, pattern.stands_on_the_bottom()),
-    }
-}
-
 /// The themes in the mods folder, as last read: each worked out, or what is wrong with it.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Library {

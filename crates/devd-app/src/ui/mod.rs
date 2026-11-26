@@ -1018,27 +1018,7 @@ pub fn art(cx: &App) -> Div {
         return div();
     }
     let file = t.art.clone();
-    // A smooth scene is a picture of the whole window, not dots in a corner.
-    if t.pattern.is_soft() {
-        return div().absolute().size_full().opacity(t.art_strength).child(
-            img(file).size_full().object_fit(gpui::ObjectFit::Cover),
-        );
-    }
-    // The corner it comes from: a theme file may ask for any of the four.
-    let (left, bottom) = crate::theme::art_corner(&file, t.pattern);
-    let el = div()
-        .absolute()
-        .w(px(dither::WIDTH as f32))
-        .h(px(dither::HEIGHT as f32))
-        .opacity(t.art_strength);
-    let el = if left { el.left(px(0.0)) } else { el.right(px(0.0)) };
-    let el = if bottom { el.bottom(px(0.0)) } else { el.top(px(0.0)) };
-    el.child(
-        img(file)
-            .w(px(dither::WIDTH as f32))
-            .h(px(dither::HEIGHT as f32))
-            .object_fit(gpui::ObjectFit::Fill),
-    )
+    div().absolute().size_full().opacity(t.art_strength).child(img(file).size_full().object_fit(gpui::ObjectFit::Cover))
 }
 
 /// A scrolling column, centred, no wider than is comfortable to read across.
