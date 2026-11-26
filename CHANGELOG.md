@@ -10,6 +10,37 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.41.0] - 2026-11-26 - A window you can work in
+
+### Added
+
+- **A browser you can use.** The Browser pane shows the page live at the pane's size, with pointer, wheel and keys
+  passed through. Closing a tab closes its page.
+- **devd watches GitHub.** Intake rules can act on a new issue, a pull request waiting for review, or CI failing on
+  the default branch.
+- **Resizable and collapsible.** Drag the edge of the conversation list, the browser and terminal column, or the runs
+  list. `Ctrl+B` hides the navigation.
+- A finished run started from a conversation now also leaves a notice in the Inbox.
+
+### Changed
+
+- **The composer** scrolls by pixel with a scrollbar, has undo and redo, and Ctrl+Home and Ctrl+End.
+- **Conversations.** The assistant's replies carry its face, name and model. A failed step is a card with its reason
+  read whole.
+- **Runs** opens on a run instead of a blank page, and the long report is on request under its headline.
+- Finished-run notices in the Inbox lead with the run's title.
+- The rail's Assistant returns to the last conversation, sub-tabs name their area in the top bar, and the command
+  menu no longer matches letters scattered across a long entry.
+- Wording, placement and status truthfulness across the window.
+
+### Fixed
+
+- Self-healing no longer retries, every few minutes, a program this machine cannot manage as a service.
+- The model table in Intelligence counts accepted work for the default model instead of filing it as not recorded.
+- Conversation header facts no longer overflow into the side pane.
+
+---
+
 ## [0.40.14] - 2026-11-22 - One keyboard, one scale
 
 A pass over the window with every screen captured and read against `docs/design/rules.md`.

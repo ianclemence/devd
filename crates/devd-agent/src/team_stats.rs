@@ -104,12 +104,25 @@ pub fn stats(ctx: &Ctx) -> Result<Value> {
 
     // Which model each conversation ran on, so the same task record can say
     // whether a model's work was accepted and what it cost to get there.
+    // A conversation that did not name a model ran on its provider's default, or the default provider's: name it the
+    // way `usage` does, so the same model is one row in both and its accepted work is not filed under "not recorded".
+    let providers = ctx.store.list_providers().unwrap_or_default();
+    let default_model_of: BTreeMap<String, String> = providers.iter().filter_map(|p| Some((p.id.clone(), p.default_model.clone()?))).collect();
+    let fallback_model = providers.iter().find(|p| p.is_default).or_else(|| providers.first()).and_then(|p| p.default_model.clone());
     let thread_model: BTreeMap<String, String> = ctx
         .store
         .list_threads(100_000)
         .unwrap_or_default()
         .into_iter()
-        .map(|t| (t.id.clone(), t.model.clone().unwrap_or_else(|| "default model".into())))
+        .map(|t| {
+            let model = t
+                .model
+                .clone()
+                .or_else(|| t.provider_id.as_ref().and_then(|id| default_model_of.get(id)).cloned())
+                .or_else(|| fallback_model.clone())
+                .unwrap_or_else(|| "default model".into());
+            (t.id.clone(), model)
+        })
         .collect();
 
     let mut all = Tally::default();

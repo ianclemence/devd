@@ -515,6 +515,9 @@ fn duration(seconds: Option<i64>) -> String {
 fn role_name(id: &str) -> String {
     id.split(['-', '_'])
         .map(|part| {
+            if part.eq_ignore_ascii_case("qa") {
+                return "QA".to_string();
+            }
             let mut chars = part.chars();
             match chars.next() {
                 Some(first) => first.to_uppercase().chain(chars).collect::<String>(),

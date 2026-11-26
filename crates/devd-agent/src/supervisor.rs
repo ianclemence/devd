@@ -130,7 +130,14 @@ fn tick(ctx: &Ctx, registry: &Registry, watches: &mut HashMap<String, Watch>) {
                     record(ctx, "service.restart_failed", &s.name, &why);
                 }
             }
-            Err(e) => record(ctx, "service.restart_failed", &s.name, &e.to_string()),
+            Err(e) => {
+                record(ctx, "service.restart_failed", &s.name, &e.to_string());
+                // A program devd cannot manage as a service on this machine will not become one by asking again, and each
+                // ask is a failed row in Activity. Say so once and stop for this cooldown.
+                if matches!(e, devd_core::DevdError::Unsupported(_)) {
+                    w.attempts = MAX_ATTEMPTS;
+                }
+            }
         }
     }
 }

@@ -272,6 +272,13 @@ impl Shape {
             .collect::<Vec<_>>()
             .join(" ");
         match subject.split_once(": ") {
+            // News that a run finished is about the run: its title is what a person knows it by, and the outcome is the
+            // line under it. A decision leads with why instead, because that is what is acted on.
+            Some((word, rest)) if word == "Finished" && !rest.trim().is_empty() => Shape {
+                word: word.to_string(),
+                headline: rest.trim().to_string(),
+                about: Some(opening).filter(|o| !o.is_empty()),
+            },
             Some((word, rest)) if word.chars().count() <= 24 && !opening.is_empty() => Shape {
                 word: word.to_string(),
                 headline: opening,
