@@ -10,6 +10,33 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.42.0] - 2026-11-26 - New backgrounds, a quieter chat
+
+### Added
+
+- Code blocks in a conversation have a **Copy** button.
+- Each conversation keeps its own unsent message.
+
+### Changed
+
+- **Backgrounds** are redrawn as smooth full-window scenes. Sling is a field of fine rolling lines.
+- **Themes made by the assistant** follow design rules: one hue for the room, one accent, no colour wash unless asked.
+- **The chat is quieter.** One row says what devd is doing and opens the thought beneath it. Replies are named
+  without the model and token counts, devd's reminders to the model are not shown, and a failed step the agent got
+  past folds into the steps.
+- Asking for a new look no longer asks for a code change and a test.
+- The message box is ready to type in on arriving at a conversation.
+
+### Fixed
+
+- Activity no longer waits for the audit check before listing what was done.
+- A provider that failed once no longer stays failed: a reply clears it, and devd checks again by itself.
+- The theme guidance offered scenes devd cannot draw.
+- An empty Runs filter no longer shows an unrelated run, installing a tool is not drawn as destructive, and long
+  note titles end in an ellipsis.
+
+---
+
 ## [0.41.0] - 2026-11-26 - A window you can work in
 
 ### Added
