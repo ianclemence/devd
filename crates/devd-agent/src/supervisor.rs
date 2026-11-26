@@ -67,11 +67,55 @@ pub fn spawn(ctx: Ctx, registry: Arc<Registry>) {
         .name("devd-supervisor".into())
         .spawn(move || {
             let mut watches: HashMap<String, Watch> = HashMap::new();
+            let mut asked: Option<Instant> = None;
             loop {
                 std::thread::sleep(TICK);
                 tick(&ctx, &registry, &mut watches);
+                recheck_provider(&ctx, &mut asked);
             }
         });
+}
+
+/// How often a provider whose last answer was a failure is asked again.
+const PROVIDER_RETRY: Duration = Duration::from_secs(60);
+/// How old a good answer may be before it is checked again, in seconds.
+const PROVIDER_STALE: i64 = 6 * 60 * 60;
+
+/// Whether to ask the provider again: never checked, failing or old, and not asked in the last minute.
+fn provider_due(last: Option<(bool, i64)>, since_asked: Option<Duration>) -> bool {
+    if since_asked.is_some_and(|since| since < PROVIDER_RETRY) {
+        return false;
+    }
+    match last {
+        None => true,
+        Some((ok, age)) => !ok || age > PROVIDER_STALE,
+    }
+}
+
+/// Keep the default provider's status true without anyone pressing Test. Asking is only reading its model list, which
+/// costs nothing, and it is what turns a failure from before a restart back into the truth.
+fn recheck_provider(ctx: &Ctx, asked: &mut Option<Instant>) {
+    let Ok(providers) = ctx.store.list_providers() else {
+        return;
+    };
+    let Some(provider) = providers.iter().find(|p| p.is_default && p.enabled).or_else(|| providers.iter().find(|p| p.enabled)) else {
+        return;
+    };
+    let key = crate::secrets::read_key(&ctx.paths, provider);
+    if key.is_none() && provider.kind != "openai-compatible" {
+        return;
+    }
+    let last = ctx.store.get_provider_check(&provider.id).ok().flatten().map(|c| {
+        let age = chrono::DateTime::parse_from_rfc3339(&c.checked_at).map_or(i64::MAX, |at| (chrono::Utc::now() - at.with_timezone(&chrono::Utc)).num_seconds());
+        (c.ok, age)
+    });
+    if !provider_due(last, asked.map(|at| at.elapsed())) {
+        return;
+    }
+    *asked = Some(Instant::now());
+    let result = crate::providers::test(provider, key.as_deref());
+    let _ = ctx.store.set_provider_check(&provider.id, result.ok, &result.message, None);
+    ctx.events.emit_with("provider.checked", format!("{}: {}", provider.label, result.message), json!({ "id": provider.id, "ok": result.ok }));
 }
 
 fn tick(ctx: &Ctx, registry: &Registry, watches: &mut HashMap<String, Watch>) {
@@ -139,5 +183,20 @@ fn tick(ctx: &Ctx, registry: &Registry, watches: &mut HashMap<String, Watch>) {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod provider_tests {
+    use super::*;
+
+    #[test]
+    fn a_failure_left_from_before_a_restart_is_asked_about_again() {
+        assert!(provider_due(Some((false, 5)), None), "failing: ask at once after starting");
+        assert!(!provider_due(Some((false, 5)), Some(Duration::from_secs(10))), "but not twice in a minute");
+        assert!(provider_due(Some((false, 5)), Some(Duration::from_secs(61))));
+        assert!(!provider_due(Some((true, 60)), None), "a recent good answer stands");
+        assert!(provider_due(Some((true, PROVIDER_STALE + 1)), None));
+        assert!(provider_due(None, None));
     }
 }

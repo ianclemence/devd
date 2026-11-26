@@ -325,19 +325,33 @@ fn code(id: &str, lang: &str, source: &str, cx: &App) -> Div {
         .border_color(t.line)
         .bg(t.code)
         .overflow_hidden();
-    if !lang.is_empty() {
-        block = block.child(
-            div()
-                .px(px(12.0))
-                .py(px(5.0))
-                .border_b_1()
-                .border_color(t.line)
-                .text_size(px(size::TEXT_XS))
-                .font_family(mono())
-                .text_color(t.faint)
-                .child(lang.to_string()),
-        );
-    }
+    // The bar names the language and copies the whole block, which is the thing most often wanted from it.
+    let all = source.to_string();
+    let ink = t.text;
+    block = block.child(
+        div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .px(px(12.0))
+            .py(px(3.0))
+            .border_b_1()
+            .border_color(t.line)
+            .text_size(px(size::TEXT_XS))
+            .text_color(t.faint)
+            .child(div().font_family(mono()).child(lang.to_string()))
+            .child(
+                div()
+                    .id(ElementId::Name(format!("{id}.copy").into()))
+                    .px(px(6.0))
+                    .py(px(2.0))
+                    .rounded(px(size::RADIUS))
+                    .cursor_pointer()
+                    .hover(move |s| s.text_color(ink))
+                    .child("Copy")
+                    .on_click(move |_, _, cx| cx.write_to_clipboard(gpui::ClipboardItem::new_string(all.clone()))),
+            ),
+    );
     block.child(
         div()
             .id(ElementId::Name(format!("{id}.code").into()))

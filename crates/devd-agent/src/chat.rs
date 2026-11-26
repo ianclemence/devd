@@ -1791,6 +1791,11 @@ impl Hub {
                         };
                         sent_chars = text_chars;
                         sent_tokens = prompt_tokens.saturating_sub(tool_tokens).max(1);
+                        // A reply is the best test there is: it clears a failure left from earlier, such as the network not
+                        // being up yet when the machine started.
+                        if self.ctx.store.get_provider_check(&provider.id).ok().flatten().is_some_and(|c| !c.ok) {
+                            let _ = self.ctx.store.set_provider_check(&provider.id, true, "answered a conversation", None);
+                        }
                         chosen = Some((r, model.clone(), provider.id.clone(), why.clone()));
                         break;
                     }

@@ -995,6 +995,7 @@ impl Shell {
     /// screen hands a task to the assistant, such as Make a theme in Settings.
     pub fn ask_assistant(&mut self, text: &str, window: &mut gpui::Window, cx: &mut Context<Self>) {
         self.go(devd_app_core::nav::Route::Assistant(None), cx);
+        let _ = self.sync_draft(cx);
         let text = text.to_string();
         self.composer.update(cx, |input, cx| input.set_text(text, cx));
         window.focus(&gpui::Focusable::focus_handle(self.composer.read(cx), cx));

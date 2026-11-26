@@ -205,7 +205,7 @@ fn rows_card(rows: Vec<Row>, key: &'static str, cx: &mut Context<Shell>) -> Div 
             .whitespace_nowrap()
             .text_ellipsis()
             .font_weight(FontWeight::MEDIUM)
-            .child(row.title.clone());
+            .child(ui::Clip::new(row.title.clone()));
         let mut title = div()
             .flex()
             .items_center()
@@ -940,7 +940,7 @@ fn tools(cx: &mut Context<Shell>) -> AnyElement {
                 format!("Install {name}?"),
                 format!("devd asks your package manager to install {name}. {} Your system may ask for your permission.", text(tool, "purpose")),
                 "Install tool",
-            ));
+            ).safe());
         }
         rows.push(Row {
             mark: Some(id.clone()),

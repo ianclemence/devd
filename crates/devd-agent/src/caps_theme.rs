@@ -245,7 +245,7 @@ pub fn register(reg: &mut Registry) -> Result<()> {
         )?;
 
     reg.define::<ThemeValues>("theme.save", "Save a theme to the mods folder")
-        .description("Checks a theme and, only if it passes, writes its folder in devd's mods folder (`mod.toml` and `theme.toml`), where the window picks it up within a second. Three colours are needed: background, text and accent; every other colour is worked out in the proportions devd's own themes use unless given. When the check refuses the theme, nothing is written and every problem is returned at once, each with the contrast reached, the contrast needed and which way to move. An existing theme is replaced only with `replace: true`. Use `theme.use` afterwards to show it.")
+        .description("Before designing a theme, read the `theme` skill (skills.get): it says which pictures exist and the colour rules that keep a theme from looking muddy. Checks a theme and, only if it passes, writes its folder in devd's mods folder (`mod.toml` and `theme.toml`), where the window picks it up within a second. Three colours are needed: background, text and accent; every other colour is worked out in the proportions devd's own themes use unless given. When the check refuses the theme, nothing is written and every problem is returned at once, each with the contrast reached, the contrast needed and which way to move. An existing theme is replaced only with `replace: true`. Use `theme.use` afterwards to show it.")
         .group("theme")
         .tier(Tier::Write)
         .effect(Effect::Write)
@@ -327,4 +327,19 @@ pub fn register(reg: &mut Registry) -> Result<()> {
             },
         )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod skill_tests {
+    /// The skill once offered scenes devd did not have, so every theme that used one was refused.
+    #[test]
+    fn the_theme_skill_names_every_scene_there_is_and_no_other() {
+        let skill = include_str!("../skills/theme.md");
+        for (name, _) in devd_core::theme::Scene::ALL {
+            assert!(skill.contains(&format!("`{name}`")), "the skill does not offer `{name}`");
+        }
+        for gone in ["`aurora`", "`grid`", "`stars`", "`waves`"] {
+            assert!(!skill.contains(gone), "the skill offers {gone}, which devd cannot draw");
+        }
+    }
 }

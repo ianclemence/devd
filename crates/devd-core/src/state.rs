@@ -343,6 +343,8 @@ pub struct CertRecord {
 /// Thread-safe handle to the SQLite database.
 pub struct Store {
     conn: Mutex<Connection>,
+    /// Where the database is, when it is a file: long reads open a connection of their own beside `conn`.
+    path: Option<std::path::PathBuf>,
 }
 
 impl Store {
@@ -357,6 +359,7 @@ impl Store {
         conn.busy_timeout(std::time::Duration::from_secs(10))?;
         let store = Self {
             conn: Mutex::new(conn),
+            path: Some(path.to_path_buf()),
         };
         store.migrate()?;
         Ok(store)
@@ -382,6 +385,7 @@ impl Store {
         conn.busy_timeout(std::time::Duration::from_secs(10))?;
         Ok(Self {
             conn: Mutex::new(conn),
+            path: Some(path.to_path_buf()),
         })
     }
 
@@ -397,6 +401,7 @@ impl Store {
         conn.pragma_update(None, "foreign_keys", "ON")?;
         let store = Self {
             conn: Mutex::new(conn),
+            path: None,
         };
         store.migrate()?;
         Ok(store)
@@ -503,14 +508,31 @@ impl Store {
 
     /// Check the audit log's chain. See [`crate::audit_chain`].
     pub fn verify_audit(&self) -> Result<crate::audit_chain::Verification> {
+        // Checking the chain re-hashes every entry, which takes seconds once there are many. It is done on its own
+        // read-only connection, in one snapshot, so nothing else waits for it.
+        match &self.path {
+            Some(path) => {
+                let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+                conn.busy_timeout(std::time::Duration::from_secs(10))?;
+                let snapshot = conn.unchecked_transaction()?;
+                Self::verify_audit_on(&snapshot)
+            }
+            None => self.with(Self::verify_audit_on),
+        }
+    }
+
+    fn verify_audit_on(conn: &Connection) -> Result<crate::audit_chain::Verification> {
+        let setting = |key: &str| -> Result<Option<String>> {
+            Ok(conn.query_row("SELECT value FROM settings WHERE key = ?1", params![key], |row| row.get::<_, String>(0)).optional()?)
+        };
         let mark = |value: Option<String>| -> Option<crate::audit_chain::Mark> {
             let v = value?;
             let (id, hash) = v.split_once(':')?;
             Some((id.parse().ok()?, hash.to_string()))
         };
-        let anchor = mark(self.get_setting("audit.anchor")?);
-        let head = mark(self.get_setting("audit.head")?);
-        self.with(|conn| {
+        let anchor = mark(setting("audit.anchor")?);
+        let head = mark(setting("audit.head")?);
+        {
             // Rows from before chaining come first and are only counted. The rest are read once, in
             // order, and checked as they arrive: a log of millions of rows is never held in memory.
             let first_chained: Option<i64> = conn.query_row("SELECT MIN(id) FROM audit_log WHERE hash != ''", [], |r| r.get(0)).unwrap_or(None);
@@ -543,7 +565,7 @@ impl Store {
                 }
             }
             Ok(checker.finish())
-        })
+        }
     }
 
     /// Remove audit rows recorded before `cutoff` (RFC 3339). Returns how many.
@@ -1830,5 +1852,21 @@ mod tests {
     fn unknown_table_count_is_rejected() {
         let s = store();
         assert!(s.count("users; DROP TABLE sites").is_err());
+    }
+}
+
+#[cfg(test)]
+mod verify_alongside_tests {
+    use super::*;
+
+    /// The window's other reads must not wait for the audit check: it runs while the store's connection is held.
+    #[test]
+    fn the_audit_check_does_not_need_the_stores_own_connection() {
+        let dir = std::env::temp_dir().join(format!("devd-verify-{}", std::process::id()));
+        let store = Store::open(&dir.join("state.db")).unwrap();
+        let held = store.with(|_| Ok(store.verify_audit().map(|v| v.intact))).unwrap();
+        assert!(held.unwrap());
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
