@@ -134,15 +134,13 @@ fn platform_target() -> Option<&'static str> {
     }
 }
 
-/// Whether this process is the desktop window program rather than the command
-/// line one. The desktop embeds the server, so the footer and the updater both
-/// need to know which program a person is looking at.
-pub fn running_desktop() -> bool {
-    std::env::current_exe()
-        .ok()
-        .and_then(|path| path.file_stem().map(|s| s.to_string_lossy().to_ascii_lowercase()))
-        .map(|stem| stem == "devd-desktop")
-        .unwrap_or(false)
+/// The window programs installed beside the command-line program, under any name an installer has given them.
+pub fn windows_beside(cli: &Path) -> Vec<PathBuf> {
+    ["devd-app", "devd-desktop"]
+        .iter()
+        .map(|name| cli.with_file_name(if cfg!(windows) { format!("{name}.exe") } else { name.to_string() }))
+        .filter(|path| path.is_file())
+        .collect()
 }
 
 /// A published asset.
@@ -234,7 +232,7 @@ pub struct Check {
     pub signed: bool,
     /// The file an update would install on this platform, when the release has it.
     pub asset: Option<String>,
-    /// `desktop` when devd is running in its window, `command line` otherwise.
+    /// `desktop` when a window program is installed, `command line` otherwise.
     pub app: String,
     /// The release page, for an unsigned release the footer may only open.
     pub url: String,
@@ -244,12 +242,10 @@ pub struct Check {
 pub fn check(url: &str, allow_http: bool) -> Result<Check> {
     let release = latest(url, allow_http)?;
     let current = env!("CARGO_PKG_VERSION").to_string();
-    let desktop = running_desktop();
-    let wanted = if desktop {
-        desktop_asset_name(&release.version)
-    } else {
-        asset_name(&release.version)
-    };
+    // An installed window is updated along with the command, so an update then needs both files.
+    let desktop = util::cli_exe().is_ok_and(|cli| !windows_beside(&cli).is_empty());
+    let window_published = desktop_asset_name(&release.version).is_some_and(|n| release.asset(&n).is_some());
+    let wanted = asset_name(&release.version).filter(|_| !desktop || window_published);
     Ok(Check {
         newer: is_newer(&current, &release.version),
         signed: release.asset(SUMS).is_some() && release.asset(SUMS_SIG).is_some(),
@@ -285,110 +281,78 @@ pub struct Applied {
     pub previous: PathBuf,
     /// The installed program.
     pub installed: PathBuf,
+    /// The window programs replaced with it, for the window to restart into.
+    pub window: Vec<PathBuf>,
 }
 
-/// Download, verify and install a release.
+/// Download, verify and install a release: the command-line program, and the window program beside it when there is one.
+///
+/// Everything is downloaded and verified before anything is replaced, and a replacement that fails puts back the ones
+/// already made, so the two programs are not left at different versions. A running program can be renamed on every
+/// platform devd supports, so each new file takes its place at once; what is running changes when it next starts.
 pub fn apply(release: &Release, options: &Options<'_>) -> Result<Applied> {
     let asset_file = asset_name(&release.version)
         .ok_or_else(|| DevdError::unsupported("no update is published for this platform"))?;
-    let fetched = fetch_verified(release, options, &asset_file, options.smoke_test)?;
-
-    // Replace, keeping the old one. A running program can be renamed on every
-    // platform devd supports, so the new file takes its place without a restart.
-    let previous = PathBuf::from(format!("{}.before-{}", options.target.display(), env!("CARGO_PKG_VERSION")));
-    let _ = std::fs::remove_file(&previous);
-    std::fs::rename(&options.target, &previous)?;
-    if let Err(e) = std::fs::copy(&fetched, &options.target) {
-        // Put the old one back rather than leave nothing installed.
-        let _ = std::fs::rename(&previous, &options.target);
-        return Err(DevdError::Io(std::io::Error::other(format!(
-            "could not install the new program: {e}; the old one was left in place"
-        ))));
+    let command = fetch_verified(release, options, &asset_file, options.smoke_test)?;
+    let windows = windows_beside(&options.target);
+    let mut swaps = vec![(options.target.clone(), command)];
+    if !windows.is_empty() {
+        let asset_file = desktop_asset_name(&release.version)
+            .ok_or_else(|| DevdError::unsupported("no desktop update is published for this platform"))?;
+        // Not asked for its version: starting it would open a window, and the signed checksum is the trust here.
+        let window = fetch_verified(release, options, &asset_file, false)?;
+        swaps.extend(windows.iter().map(|target| (target.clone(), window.clone())));
     }
-    make_executable(&options.target)?;
+
+    let mut done: Vec<(PathBuf, PathBuf)> = Vec::new();
+    for (target, fetched) in &swaps {
+        match replace(target, fetched) {
+            Ok(previous) => done.push((target.clone(), previous)),
+            Err(e) => {
+                for (target, previous) in done.iter().rev() {
+                    // The new file is moved out of the way if it cannot be removed, and the old one put back.
+                    let _ = std::fs::remove_file(target).or_else(|_| std::fs::rename(target, aside(target, "undone")));
+                    let _ = std::fs::rename(previous, target);
+                }
+                return Err(DevdError::Io(std::io::Error::other(format!(
+                    "could not install {}: {e}; the old programs were left in place",
+                    target.display()
+                ))));
+            }
+        }
+    }
     Ok(Applied {
         version: release.version.clone(),
-        previous,
+        previous: done[0].1.clone(),
         installed: options.target.clone(),
+        window: windows,
     })
 }
 
-/// Download and verify the desktop window program, then hand the swap to a
-/// small script that runs after this process has exited.
-///
-/// Windows will not let a running program be replaced. The script waits for the
-/// process to go, copies the verified download over the old file, keeps the old
-/// one as `.before-<version>`, and starts the window again. devd returns the
-/// answer to the person before the script kills the process, so the footer can
-/// say what is happening.
-pub fn apply_desktop(release: &Release, options: &Options<'_>, pid: u32) -> Result<Applied> {
-    let asset_file = desktop_asset_name(&release.version)
-        .ok_or_else(|| DevdError::unsupported("no desktop update is published for this platform"))?;
-    let fetched = fetch_verified(release, options, &asset_file, false)?;
-    let target = &options.target;
-    let previous = PathBuf::from(format!("{}.before-{}", target.display(), env!("CARGO_PKG_VERSION")));
-    let staged = PathBuf::from(format!("{}.new", target.display()));
-    std::fs::copy(&fetched, &staged)?;
-    make_executable(&staged)?;
+/// A name beside `target` that nothing holds.
+fn aside(target: &Path, what: &str) -> PathBuf {
+    let plain = PathBuf::from(format!("{}.{what}", target.display()));
+    // An earlier copy that is still running cannot be removed; the new one is then kept beside it.
+    if !plain.exists() || std::fs::remove_file(&plain).is_ok() {
+        return plain;
+    }
+    PathBuf::from(format!("{}.{what}-{}", target.display(), std::process::id()))
+}
 
-    #[cfg(windows)]
-    {
-        let launcher = target.with_file_name("launch.vbs");
-        let start = if launcher.is_file() {
-            format!("\"{}\"", launcher.display())
-        } else {
-            format!("\"{}\"", target.display())
-        };
-        let script = target.with_file_name(format!("devd-update-{}.cmd", release.version));
-        let body = format!(
-            "@echo off\r\n\
-             setlocal\r\n\
-             timeout /t 2 /nobreak >nul\r\n\
-             taskkill /PID {pid} /F >nul 2>nul\r\n\
-             timeout /t 2 /nobreak >nul\r\n\
-             copy /Y \"{target}\" \"{previous}\" >nul 2>nul\r\n\
-             move /Y \"{staged}\" \"{target}\" >nul\r\n\
-             if errorlevel 1 goto failed\r\n\
-             start \"\" {start}\r\n\
-             del \"%~f0\" >nul 2>nul\r\n\
-             exit /b 0\r\n\
-             :failed\r\n\
-             start \"\" {start}\r\n\
-             exit /b 1\r\n",
-            pid = pid,
-            target = target.display(),
-            previous = previous.display(),
-            staged = staged.display(),
-            start = start,
-        );
-        std::fs::write(&script, body)?;
-        // `start` makes the updater its own process. `taskkill /F` without `/T`
-        // kills only devd, so the script survives to finish the swap.
-        std::process::Command::new("cmd")
-            .args(["/C", "start", "", "/b", &script.to_string_lossy()])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()?;
+/// Put `fetched` where `target` is, keeping the old program. Returns where the old one went.
+fn replace(target: &Path, fetched: &Path) -> Result<PathBuf> {
+    let previous = aside(target, &format!("before-{}", env!("CARGO_PKG_VERSION")));
+    std::fs::rename(target, &previous)?;
+    let installed = std::fs::copy(fetched, target)
+        .map_err(DevdError::Io)
+        .and_then(|_| make_executable(target));
+    if let Err(e) = installed {
+        // Put the old one back rather than leave nothing installed.
+        let _ = std::fs::remove_file(target);
+        let _ = std::fs::rename(&previous, target);
+        return Err(e);
     }
-    #[cfg(not(windows))]
-    {
-        // The desktop is only built for Windows today; the command-line updater
-        // is the one that runs on the other platforms. `pid` and `previous` are
-        // only used by the Windows branch, so they are named here as well.
-        let _ = (pid, previous);
-        Err(DevdError::unsupported(
-            "the desktop app updates itself on Windows only",
-        ))
-    }
-
-    #[cfg(windows)]
-    {
-        Ok(Applied {
-            version: release.version.clone(),
-            previous,
-            installed: target.clone(),
-        })
-    }
+    Ok(previous)
 }
 
 /// Verify the release's signature and checksum, download the named asset and
@@ -667,6 +631,54 @@ mod tests {
             },
             name,
         )
+    }
+
+    /// A release with both programs, signed with `seed`. Without `with_window` the window's file is not served.
+    fn both(seed: &str, with_window: bool) -> Release {
+        let (command, window) = (asset_name("9.9.9").unwrap(), desktop_asset_name("9.9.9").unwrap());
+        let hash = |b: &[u8]| hex::encode(ring::digest::digest(&ring::digest::SHA256, b));
+        let sums = format!("{}  {command}\n{}  {window}\n", hash(b"the new command"), hash(b"the new window"));
+        let signature = hex::encode(sign(seed, sums.as_bytes()).unwrap());
+        let mut routes = vec![("/sums", sums.into_bytes()), ("/sig", signature.into_bytes()), ("/command", b"the new command".to_vec())];
+        if with_window {
+            routes.push(("/window", b"the new window".to_vec()));
+        }
+        let base = serve(routes);
+        let asset = |name: String, path: &str| Asset { name, url: format!("{base}/{path}") };
+        Release {
+            tag: "v9.9.9".into(),
+            version: "9.9.9".into(),
+            assets: vec![asset(SUMS.into(), "sums"), asset(SUMS_SIG.into(), "sig"), asset(command, "command"), asset(window, "window")],
+        }
+    }
+
+    fn window_in(dir: &Path) -> PathBuf {
+        let path = dir.join(if cfg!(windows) { "devd-app.exe" } else { "devd-app" });
+        std::fs::write(&path, b"the old window").unwrap();
+        path
+    }
+
+    #[test]
+    fn the_window_beside_the_command_is_updated_with_it() {
+        let seed = generate_seed().unwrap();
+        let public = public_key_of(&seed).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let (o, window) = (options(&public, dir.path()), window_in(dir.path()));
+        let applied = apply(&both(&seed, true), &o).unwrap();
+        assert_eq!(applied.window, vec![window.clone()]);
+        assert_eq!(std::fs::read(&o.target).unwrap(), b"the new command");
+        assert_eq!(std::fs::read(&window).unwrap(), b"the new window");
+    }
+
+    #[test]
+    fn nothing_is_replaced_when_the_window_cannot_be_downloaded() {
+        let seed = generate_seed().unwrap();
+        let public = public_key_of(&seed).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let (o, window) = (options(&public, dir.path()), window_in(dir.path()));
+        assert!(apply(&both(&seed, false), &o).is_err());
+        assert_eq!(std::fs::read(&o.target).unwrap(), b"the old program");
+        assert_eq!(std::fs::read(&window).unwrap(), b"the old window");
     }
 
     #[test]

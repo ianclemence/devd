@@ -1648,30 +1648,9 @@ impl Shell {
                 decision.plan["tier"].as_str(),
                 Some("destructive" | "admin")
             );
-        let (approve_token, deny_token) = (decision.token.clone(), decision.token.clone());
-        let answer = |approve: bool, token: String| {
-            move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
-                let conn = devd(cx).conn.clone();
-                let sync = devd(cx).sync.clone();
-                let token = token.clone();
-                // The server replays its own record of the invocation, so what
-                // was shown here is exactly what runs.
-                std::thread::spawn(move || {
-                    let _ = if approve {
-                        conn.approve(&token)
-                    } else {
-                        conn.deny(&token)
-                    };
-                    for domain in [
-                        "site", "service", "hosts", "git", "project", "chat", "team", "approval",
-                        "inbox", "health",
-                    ] {
-                        sync.invalidate(domain);
-                    }
-                });
-                cx.global_mut::<Devd>().decisions.remove(0);
-                cx.refresh_windows();
-            }
+        let (approved, denied) = (decision.clone(), decision.clone());
+        let answer = |approve: bool, decision: crate::state::Decision| {
+            move |_: &ClickEvent, _: &mut Window, cx: &mut App| crate::state::answer_decision(cx, decision.clone(), approve)
         };
         let panel = div()
             .w(px(520.0))
@@ -1738,14 +1717,14 @@ impl Shell {
                 let buttons = div().flex().justify_end().gap(px(8.0));
                 if blocked.is_empty() {
                     buttons
-                        .child(Button::new("decision.deny", "Decline").on_click(answer(false, deny_token)))
+                        .child(Button::new("decision.deny", "Decline").on_click(answer(false, denied.clone())))
                         .child(
                             Button::new("decision.approve", "Approve")
                                 .kind(if destructive { ButtonKind::Danger } else { ButtonKind::Primary })
-                                .on_click(answer(true, approve_token)),
+                                .on_click(answer(true, approved)),
                         )
                 } else {
-                    buttons.child(Button::new("decision.close", "Close").kind(ButtonKind::Primary).on_click(answer(false, deny_token)))
+                    buttons.child(Button::new("decision.close", "Close").kind(ButtonKind::Primary).on_click(answer(false, denied)))
                 }
             });
         Some(
