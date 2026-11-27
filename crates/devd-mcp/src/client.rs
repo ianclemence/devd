@@ -399,7 +399,10 @@ impl Connection {
             }
             _ => {
                 let program = server.command.clone().ok_or_else(|| DevdError::invalid(format!("`{}` has no command", server.name)))?;
-                let mut cmd = Command::new(&program);
+                // Windows runs `npx`, `uvx` and the like through a `.cmd` file, which starting the bare name does not
+                // find: look it up on PATH the way a terminal does.
+                let found = cfg!(windows).then(|| devd_core::util::which(&program)).flatten();
+                let mut cmd = Command::new(found.as_deref().unwrap_or_else(|| std::path::Path::new(&program)));
                 cmd.args(&server.args)
                     .stdin(Stdio::piped())
                     .stdout(Stdio::piped())
@@ -737,6 +740,8 @@ fn base_env() -> BTreeMap<String, String> {
         "PROGRAMW6432", "HOMEDRIVE", "HOMEPATH", "USERNAME", "USERDOMAIN", "OS",
         "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "LANG", "LC_ALL", "TZ", "SHELL", "TERM",
         "TMPDIR", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
+        // Where the Android and Java tools are, for servers that drive devices.
+        "ANDROID_HOME", "ANDROID_SDK_ROOT", "JAVA_HOME",
     ];
     std::env::vars_os()
         .filter_map(|(k, v)| {

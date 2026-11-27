@@ -43,7 +43,7 @@ pub fn register(reg: &mut Registry) -> Result<()> {
         )?;
 
     reg.define::<Nothing>("update.apply", "Install the latest devd")
-        .description("Downloads the latest release, verifies the signature on its checksum file with the key built into this program, verifies the program against the signed checksum, runs it to confirm the version, and installs it. When devd is running in its window, the new window program is staged and a small updater swaps it after devd exits, then starts devd again. When devd is running as a command, the installed command is replaced and keeps the old one beside it as `devd.before-<version>`. Refuses an unsigned or wrongly signed release. Human only.")
+        .description("Downloads the latest release, verifies the signature on its checksum file with the key built into this program, verifies each program against the signed checksum, runs the command to confirm the version, and installs the command and the window beside it, keeping each old one as `<name>.before-<version>`. The window restarts devd into the new version; after `devd update apply`, devd uses it when it next starts. Refuses an unsigned or wrongly signed release. Human only.")
         .group("update")
         .tier(Tier::Destructive)
         .effect(Effect::System)
@@ -53,9 +53,9 @@ pub fn register(reg: &mut Registry) -> Result<()> {
             |_, _| {
                 Ok(Plan::new("update.apply", "replace the installed devd with the latest signed release")
                     .step("verify the release's signature with the built-in key")
-                    .step("verify the program against the signed checksum")
+                    .step("verify each program against the signed checksum")
                     .step("run it to confirm its version")
-                    .step("install it and restart devd")
+                    .step("install the command and the window")
                     .effect("changes the installed program")
                     .destructive(true))
             },
@@ -68,30 +68,18 @@ pub fn register(reg: &mut Registry) -> Result<()> {
                     ));
                 }
                 let release = update::latest(update::LATEST_URL, false)?;
-                let desktop = update::running_desktop();
-                let target = if desktop {
-                    std::env::current_exe().map_err(|e| {
-                        devd_core::DevdError::internal(format!("could not find the running devd program: {e}"))
-                    })?
-                } else {
-                    devd_core::util::cli_exe()?
-                };
                 let options = update::Options {
                     public_key: update::RELEASE_PUBLIC_KEY,
-                    target,
+                    target: devd_core::util::cli_exe()?,
                     cache: ctx.paths.cache(),
                     smoke_test: true,
                     allow_http: false,
                 };
-                let applied = if desktop {
-                    update::apply_desktop(&release, &options, std::process::id())?
-                } else {
-                    update::apply(&release, &options)?
-                };
-                let message = if desktop {
-                    format!("installed devd {}; devd is restarting into the new version", applied.version)
-                } else {
+                let applied = update::apply(&release, &options)?;
+                let message = if applied.window.is_empty() {
                     format!("installed devd {}; the previous program is {}", applied.version, applied.previous.display())
+                } else {
+                    format!("installed devd {} and its window; devd uses it when it next starts", applied.version)
                 };
                 Ok(Outcome::with_data(message, json!(applied)))
             },

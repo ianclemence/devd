@@ -67,6 +67,13 @@ fn main() {
         }
         return;
     }
+    // Started by the window an update replaced: wait for it to go, so this one does not attach to what is closing.
+    if let Some(old) = std::env::var("DEVD_AFTER_PID").ok().and_then(|pid| pid.parse::<u32>().ok()) {
+        let began = std::time::Instant::now();
+        while devd_core::process::pid_alive(old) && began.elapsed() < std::time::Duration::from_secs(15) {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
     let conn = match backend::connect() {
         Ok(conn) => conn,
         Err(message) => {

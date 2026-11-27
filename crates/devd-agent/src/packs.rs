@@ -95,6 +95,9 @@ pub struct McpEntry {
     /// The address, for a remote server.
     #[serde(default)]
     pub url: Option<String>,
+    /// Values the server is started with. Never a secret: a manifest is a file anyone can read.
+    #[serde(default)]
+    pub env: std::collections::BTreeMap<String, String>,
 }
 
 fn invalid(why: impl Into<String>) -> DevdError {
@@ -340,6 +343,9 @@ pub fn clashes(paths: &Paths, store: &devd_core::Store, loaded: &Loaded) -> Vec<
 /// rather than copied, so there is one source of truth — and installing one writes them to a
 /// scratch folder only long enough to run the same checked install a folder gets.
 pub const BUNDLED: &[(&str, &[(&str, &str)])] = &[(
+    "mobile",
+    &[(MANIFEST, include_str!("../../../packs/mobile/devd-pack.json"))],
+), (
     "recreate",
     &[
         (MANIFEST, include_str!("../../../packs/recreate/devd-pack.json")),
@@ -436,8 +442,12 @@ pub fn install(paths: &Paths, store: &devd_core::Store, loaded: &Loaded, source:
         }
         for e in &loaded.manifest.mcp {
             let now = devd_core::util::now();
+            let id = devd_core::util::new_id();
+            if !e.env.is_empty() {
+                devd_mcp::client::save_env(paths, &id, &e.env)?;
+            }
             store.mcp_put(&devd_core::McpServer {
-                id: devd_core::util::new_id(),
+                id,
                 name: e.name.clone(),
                 transport: if e.url.is_some() { "http".into() } else { "stdio".into() },
                 command: e.command.clone(),
@@ -479,6 +489,7 @@ fn undo(paths: &Paths, store: &devd_core::Store, record: &Record) {
     }
     for name in &record.mcp {
         if let Ok(Some(s)) = store.mcp_server(name) {
+            devd_mcp::client::delete_env(paths, &s.id);
             let _ = store.mcp_delete(&s.id);
         }
     }
@@ -702,6 +713,22 @@ List who would misuse it, how, and what stops them.
         let r = install(&paths, &store, &load(v2.path()).unwrap(), "v2").unwrap();
         assert_eq!(r.version, "1.1.0");
         assert_eq!(installed(&paths).len(), 1, "one record per pack");
+    }
+
+    #[test]
+    fn the_bundled_mobile_pack_adds_the_device_server_off_with_telemetry_disabled() {
+        let (_d, paths) = temp_paths();
+        let store = devd_core::Store::open_in_memory().unwrap();
+        let record = install_bundled(&paths, &store, "mobile").unwrap();
+        assert_eq!(record.mcp, vec!["argent".to_string()]);
+        let server = store.mcp_server("argent").unwrap().unwrap();
+        assert!(!server.enabled && server.trust == McpTrust::Ask, "a person turns it on");
+        assert_eq!(server.args, vec!["-y", "@swmansion/argent@0.35.0", "mcp"]);
+        assert_eq!(devd_mcp::client::read_env(&paths, &server.id).unwrap().get("DO_NOT_TRACK").map(String::as_str), Some("1"));
+        assert!(crate::skills::get(&paths, "device-testing").is_ok(), "the skill is built in");
+        remove(&paths, &store, "mobile").unwrap();
+        assert!(store.mcp_server("argent").unwrap().is_none());
+        assert!(devd_mcp::client::read_env(&paths, &server.id).unwrap().is_empty(), "its environment goes with it");
     }
 
     #[test]

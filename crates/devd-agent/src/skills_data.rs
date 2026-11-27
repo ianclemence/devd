@@ -50,6 +50,7 @@ pub const BUILTIN: &[(&str, &str)] = &[
     ("make-it-safe-to-rerun", include_str!("../skills/make-it-safe-to-rerun.md")),
     ("make-the-narrowest-change", include_str!("../skills/make-the-narrowest-change.md")),
     ("ml-experiments", include_str!("../skills/ml-experiments.md")),
+    ("device-testing", include_str!("../skills/device-testing.md")),
     ("mobile-release-checklist", include_str!("../skills/mobile-release-checklist.md")),
     ("model-the-domain", include_str!("../skills/model-the-domain.md")),
     ("motion-design", include_str!("../skills/motion-design.md")),

@@ -366,7 +366,10 @@ checked the same way:
 * **From a pack.** `packs.install` (human only) adds the roles, skills and tool
   servers a pack names, all or nothing. The bundled `recreate` pack adds the
   Recreator, its four skills and the craft-anything tool server (disabled);
-  `packs.remove` takes exactly those back.
+  `packs.remove` takes exactly those back. The bundled `mobile` pack adds the
+  Argent device tool server (disabled, with its telemetry off); once a person
+  turns it on in Team > MCP, the `device-testing` skill tells the mobile and QA
+  members how to prove a change on a device.
 
 A role of your own may use up to the exec tier, must not name extra capabilities,
 cannot take a built-in's name, may carry only skills that exist (built in or in
@@ -625,7 +628,7 @@ window does not invent a time series it does not have.
 ## Skills
 
 Skills are short Markdown instructions agents load with `skills.get` when the work
-calls for them. 92 ship with devd, and each belongs to one stage of the work, so
+calls for them. 93 ship with devd, and each belongs to one stage of the work, so
 an agent finds the right one without reading all of them. The table below maps the
 stages rather than listing every skill; the prompt index and `skills.list` are the
 authoritative list.
@@ -635,7 +638,7 @@ authoritative list.
 | **Discover** | understanding the request and the system before acting | `work` (start here), `how`, `why`, `investigate`, `check-the-request`, `sharpen`, `restate`, `choose-by-the-outcome`, `recall`, `catch-up`, `handoff`, `uncover-the-real-structure` |
 | **Design** | deciding a shape | `architect`, `design-from-use`, `weigh-several-shapes`, `re-examine-the-design`, `model-the-domain`, `put-rules-in-the-compiler`, `validate-at-the-edge`, `arena`, `api-design`, `figure-it-out`, `threat-model`, `product-requirements`, `user-stories` |
 | **Build** | writing the change | `interface-contract`, `build-feature`, `fix-bug`, `refactor`, `prototype`, `improve-performance`, `tdd`, `land-one-unit-at-a-time`, `make-the-narrowest-change`, `build-the-tool-if-it-repeats`, `finish-the-migration`, `plant-the-fix-in-the-structure`, `no-comments`, `benchmark-checklist`, `create-verification-skill`, `database-migrations`, `swarm`, `hyperframes`, `stageshow`, `work-on-a-branch` |
-| **Check** | proving a result and keeping it honest | `prove-it-works`, `test-what-callers-see`, `fix-the-root-cause`, `report-numbers-honestly`, `keep-it-readable`, `agent-browser`, `agent-desktop`, `check-the-mail` |
+| **Check** | proving a result and keeping it honest | `prove-it-works`, `test-what-callers-see`, `device-testing`, `fix-the-root-cause`, `report-numbers-honestly`, `keep-it-readable`, `agent-browser`, `agent-desktop`, `check-the-mail` |
 | **Review** | reading someone else's change | `interrogate`, `blast-radius`, `secure-coding-review`, `ui-design-review`, `accessibility-check`, `correct`, `reflect` |
 | **Ship** | landing it | `ship`, `decision-log`, `mobile-release-checklist` |
 | **Words** | prose, reports, documentation | `plain-speech`, `unslop`, `technical-writing` |

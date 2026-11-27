@@ -380,7 +380,8 @@ pub fn confirmation(capability: &str, data: &Value) -> Option<String> {
         "autostart.enable" => "devd will start when you sign in.".to_string(),
         "autostart.disable" => "devd will no longer start when you sign in.".to_string(),
         "site.remove" => "The site is removed. Its folder is untouched.".to_string(),
-        "update.apply" => "The update is installed. devd restarts itself.".to_string(),
+        "update.apply" if data["newer"] == serde_json::json!(false) => "devd is already up to date.".to_string(),
+        "update.apply" => format!("devd {} is installed. Restarting…", data["version"].as_str().unwrap_or("update")),
         "toolchain.install" => format!(
             "Installed {}.",
             data["tool"]

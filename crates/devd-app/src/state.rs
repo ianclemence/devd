@@ -156,8 +156,10 @@ impl Toast {
 /// A write that has not answered yet, and what to call it while it runs.
 #[derive(Debug, Clone)]
 pub struct Running {
-    /// Which write.
-    pub id: MutationId,
+    /// Which write. None for an approved operation, which is named by its approval instead.
+    pub id: Option<MutationId>,
+    /// The approval it is running under.
+    pub approval: Option<String>,
     /// What it is doing, in the person's words.
     pub text: String,
     /// The stack run it started, when it can be followed or cancelled.
@@ -664,7 +666,7 @@ pub fn start_write(
     if let Some(text) = text {
         cx.global_mut::<Devd>()
             .running
-            .push(Running { id, text, run_id });
+            .push(Running { id: Some(id), approval: None, text, run_id });
     }
     id
 }
@@ -673,6 +675,97 @@ pub fn start_write(
 fn log_created_project(capability: &str, value: &Value) -> bool {
     matches!(capability, "project.init" | "project.create")
         && value["status"].as_str() == Some("ok")
+}
+
+/// A write whose result is not otherwise visible says that it worked.
+fn report_done(state: &mut Devd, capability: &str, value: &Value) {
+    let Some(text) = devd_app_core::status::confirmation(capability, value) else {
+        return;
+    };
+    // A check that ran and found a problem is a result, not a success.
+    let failed = value["ok"] == json!(false) && value["status"].as_str() != Some("cancelled");
+    state.toasts.push(if log_created_project(capability, value) {
+        Toast::opening(text, "/projects")
+    } else {
+        Toast::new(text, failed)
+    });
+}
+
+/// Answer the plan on screen. An approved operation is named while it runs and says how it ended, as any other write
+/// does: it can take a minute, and a refusal must not look like nothing happened.
+pub fn answer_decision(cx: &mut App, decision: Decision, approve: bool) {
+    let (conn, sync) = (devd(cx).conn.clone(), devd(cx).sync.clone());
+    let Decision { capability, token, .. } = decision;
+    let state = cx.global_mut::<Devd>();
+    state.decisions.retain(|d| d.token != token);
+    if approve {
+        let text = if capability == "update.apply" { "Downloading and installing the update…" } else { "Running what you approved…" };
+        state.running.push(Running { id: None, approval: Some(token.clone()), text: text.to_string(), run_id: None });
+    }
+    cx.refresh_windows();
+    let asked = token.clone();
+    // The server replays its own record of the invocation, so what was shown is exactly what runs.
+    let answered = cx.background_executor().spawn(async move {
+        if approve { conn.approve(&asked) } else { conn.deny(&asked) }
+    });
+    cx.spawn(async move |cx| {
+        let result = answered.await;
+        for domain in ["site", "service", "hosts", "git", "project", "chat", "team", "approval", "inbox", "health", "update"] {
+            sync.invalidate(domain);
+        }
+        let _ = cx.update(|cx| {
+            let state = cx.global_mut::<Devd>();
+            state.running.retain(|run| run.approval.as_deref() != Some(token.as_str()));
+            match result {
+                Ok(reply) if approve => {
+                    let data = &reply["outcome"]["data"];
+                    report_done(state, &capability, data);
+                    if capability == "update.apply" && data["version"].is_string() {
+                        restart_into_update(data, cx);
+                    }
+                }
+                Ok(_) => {}
+                Err(failure) => state.toasts.push(Toast::new(devd_app_core::status::failure(&failure.message), true)),
+            }
+            cx.refresh_windows();
+        });
+    })
+    .detach();
+}
+
+/// Open the newly installed window and close this one. The new window replaces the background devd, which is still the
+/// old version, as it starts.
+fn restart_into_update(applied: &Value, cx: &mut App) {
+    let installed: Vec<std::path::PathBuf> = applied["window"]
+        .as_array()
+        .map(|list| list.iter().filter_map(|p| p.as_str().map(Into::into)).collect())
+        .unwrap_or_default();
+    let mine = std::env::current_exe().ok().and_then(|p| p.file_name().map(|n| n.to_os_string()));
+    let Some(program) = installed.iter().find(|p| p.file_name() == mine.as_deref()).or(installed.first()).cloned() else {
+        return;
+    };
+    let wait = std::process::id().to_string();
+    cx.spawn(async move |cx| {
+        // Long enough to read that it was installed.
+        cx.background_executor().timer(Duration::from_millis(1500)).await;
+        let _ = cx.update(|cx| match std::process::Command::new(&program).env("DEVD_AFTER_PID", &wait).spawn() {
+            Ok(_) => {
+                let state = cx.global_mut::<Devd>();
+                state.allow_close.set(true);
+                if state.conn.owner {
+                    let _ = devd_agent::browser::close();
+                    state.conn.close();
+                }
+                cx.quit();
+            }
+            Err(e) => {
+                let text = format!("The update is installed, but the new window did not start: {e}. Close devd and open it again.");
+                cx.global_mut::<Devd>().toasts.push(Toast::new(text, true));
+                cx.refresh_windows();
+            }
+        });
+    })
+    .detach();
 }
 
 /// Report the writes that finished: a toast for a failure, a decision for a plan.
@@ -684,22 +777,10 @@ fn settle_writes(cx: &mut App) {
     let state = cx.global_mut::<Devd>();
     for outcome in outcomes {
         // A write that was named while it ran stops being named now.
-        state.running.retain(|run| run.id != outcome.id);
+        state.running.retain(|run| run.id != Some(outcome.id));
         match outcome.settled {
             Settled::Done(value) => {
-                // A write whose result is not otherwise visible says that it worked.
-                if let Some(text) = devd_app_core::status::confirmation(&outcome.capability, &value)
-                {
-                    // A check that ran and found a problem is a result, not a success.
-                    let failed = value["ok"] == json!(false)
-                        && value["status"].as_str() != Some("cancelled");
-                    let toast = if log_created_project(&outcome.capability, &value) {
-                        Toast::opening(text, "/projects")
-                    } else {
-                        Toast::new(text, failed)
-                    };
-                    state.toasts.push(toast);
-                }
+                report_done(state, &outcome.capability, &value);
                 if outcome.capability == "browser.screenshot"
                     && let Some(file) = value["file"].as_str()
                 {
