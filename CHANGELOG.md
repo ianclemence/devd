@@ -10,6 +10,14 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.43.1] - 2026-11-27 - A finished run is always on record
+
+### Fixed
+
+- A team run no longer reads as done for a moment before its log says so.
+
+---
+
 ## [0.43.0] - 2026-11-27 - Device testing
 
 ### Added

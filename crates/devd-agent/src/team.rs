@@ -975,12 +975,17 @@ impl Team {
 
     fn event(&self, run_id: &str, task_id: Option<&str>, kind: &str, data: Value) {
         if let Ok(id) = self.ctx.store.add_team_event(run_id, task_id, kind, &data) {
-            self.ctx.events.emit_with(
-                "team.event",
-                format!("{kind} in run {run_id}"),
-                json!({ "run": run_id, "kind": kind, "id": id }),
-            );
+            self.announce(run_id, kind, id);
         }
+    }
+
+    /// Tell whoever is listening that a run's log has a new line.
+    fn announce(&self, run_id: &str, kind: &str, id: i64) {
+        self.ctx.events.emit_with(
+            "team.event",
+            format!("{kind} in run {run_id}"),
+            json!({ "run": run_id, "kind": kind, "id": id }),
+        );
     }
 
     // ------------------------------------------------------------- the mandate
@@ -4130,10 +4135,15 @@ impl Team {
         self.ctx
             .store
             .set_run_verdict(&run.id, verdict, completion.reviewed_commit.as_deref())?;
+        // The line is in the log before the run reads as done, so nothing sees a finished run without it; listeners are
+        // told afterwards, so what they read again is already done.
+        let logged = self.ctx.store.add_team_event(&run.id, None, "done", &json!({ "tasks": real.len(), "verified": verified, "accepted_by_hand": by_hand, "lessons": lessons, "verdict": verdict, "reviewed_commit": completion.reviewed_commit, "by_hand": completion.by_hand }));
         self.ctx
             .store
             .set_run_state(&run.id, "done", Some(&summary), None)?;
-        self.event(&run.id, None, "done", json!({ "tasks": real.len(), "verified": verified, "accepted_by_hand": by_hand, "lessons": lessons, "verdict": verdict, "reviewed_commit": completion.reviewed_commit, "by_hand": completion.by_hand }));
+        if let Ok(id) = logged {
+            self.announce(&run.id, "done", id);
+        }
         self.remember_run(run, "done", &summary, &lessons);
         self.tell_requester(
             run,
