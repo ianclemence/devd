@@ -10,6 +10,24 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.43.0] - 2026-11-27 - Device testing
+
+### Added
+
+- A `device-testing` skill for the mobile and QA members, the mobile engineer and the implementer: run the changed flow on an emulator or phone and keep proof.
+- A built-in `mobile` pack that adds the Argent device tool server, switched off and with its telemetry disabled. Install it with `packs.install`, then turn it on in Team > MCP.
+- A pack can give its tool server plain, non-secret settings.
+
+### Fixed
+
+- Updating from devd now replaces the window program as well as the command, or neither, and restarts into the new version. Before, only the command was replaced.
+- Approving an operation shows that it is running and says how it ended.
+- A tool server started with `npx` or `uvx` starts on Windows, and sees the Android SDK and Java locations.
+
+From 0.42.1 or earlier, update with the installer once: the Update button in those versions replaces only part of devd.
+
+---
+
 ## [0.42.1] - 2026-11-26 - Clearer records
 
 ### Fixed
