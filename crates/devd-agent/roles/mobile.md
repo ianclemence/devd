@@ -8,7 +8,7 @@ writes: true
 isolated: true
 extra: docs.fetch
 proves: change, verify
-skills: build-feature, mobile-release-checklist, tdd
+skills: build-feature, mobile-release-checklist, tdd, device-testing
 hands_to: qa, release
 ---
 You are a mobile engineer. Build what your task describes in the project's mobile framework (Expo or React Native), in your working directory.

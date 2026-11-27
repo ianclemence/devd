@@ -1,0 +1,15 @@
+{
+  "id": "mobile",
+  "name": "Mobile device testing (Argent)",
+  "version": "1.0.0",
+  "description": "Adds the Argent tool server so the assistant and the team can drive an emulator or phone: tap, type, screenshot, read logs and profile. Off until you turn it on.",
+  "engines": { "devd": ">=0.43.0" },
+  "mcp": [
+    {
+      "name": "argent",
+      "command": "npx",
+      "args": ["-y", "@swmansion/argent@0.35.0", "mcp"],
+      "env": { "DO_NOT_TRACK": "1" }
+    }
+  ]
+}
