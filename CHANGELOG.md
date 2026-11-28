@@ -10,6 +10,17 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.45.4] - 2026-11-29 - Checking is a moment
+
+### Fixed
+
+- **The strip no longer keeps "Checking the machine…".** The window's first frame says that
+  while it reads health; the browser client kept it, so on a restart it stood on Home. A first
+  answer that is still checking is not kept, and each load asks for a fresh answer rather than a
+  cached one. Verified against a freshly started daemon: Home, Server > Tools and Settings > API
+  and tools all read "Everything is running | devd 0.45.4".
+
+---
 ## [0.45.3] - 2026-11-29 - The strip keeps a whole answer
 
 ### Fixed
