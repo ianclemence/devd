@@ -28,7 +28,7 @@ use gpui::{
 
 pub use clip::Clip;
 
-use crate::theme::{Tone, mono, size, theme};
+use crate::theme::{Tone, size, theme};
 
 /// An element id made of a name and a number: the nth row of a named list.
 pub fn nid(name: &'static str, n: usize) -> ElementId {
@@ -428,7 +428,8 @@ pub fn kbd(keys: &str, cx: &App) -> Div {
                     .border_color(t.line)
                     .bg(t.hover)
                     .text_size(px(10.5))
-                    .font_family(mono())
+                    // A symbol (⌘, ⌥) comes from the system's symbol face; the UI face draws it as a box.
+                    .font_family(crate::theme::symbols())
                     .text_color(t.muted)
                     .child(key_label(key)),
             );
