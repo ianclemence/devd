@@ -206,11 +206,11 @@ pub const RAIL: &[RailItem] = &[
     RailItem { label: "Assistant", segment: "assistant", icon: "assistant", area: None },
     RailItem { label: "Runs", segment: "runs", icon: "runs", area: Some(Area::Runs) },
     RailItem { label: "Team", segment: "team", icon: "team", area: Some(Area::Team) },
-    RailItem { label: "Intelligence", segment: "intelligence", icon: "intelligence", area: None },
+    RailItem { label: "Intelligence", segment: "intelligence", icon: "models", area: None },
     RailItem { label: "Projects", segment: "projects", icon: "folder", area: Some(Area::Projects) },
     RailItem { label: "Sites", segment: "sites", icon: "globe", area: Some(Area::Sites) },
     RailItem { label: "Server", segment: "server", icon: "machine", area: Some(Area::Server) },
-    RailItem { label: "Activity", segment: "activity", icon: "activity", area: None },
+    RailItem { label: "Activity", segment: "activity", icon: "clock", area: None },
     RailItem { label: "Settings", segment: "settings", icon: "settings", area: Some(Area::Settings) },
 ];
 
@@ -226,9 +226,9 @@ pub fn rail_script() -> String {
             None => "null".to_string(),
         };
         out.push_str(&format!(
-            "{{\"label\":{:?},\"path\":{:?},\"icon\":{:?},\"area\":{area}}}",
+            "{{\"label\":{:?},\"segment\":{:?},\"icon\":{:?},\"area\":{area}}}",
             item.label,
-            format!("/{}", item.segment),
+            item.segment,
             item.icon
         ));
     }
@@ -381,6 +381,7 @@ mod tests {
         let script = rail_script();
         assert!(script.starts_with("window.DEVD_RAIL=["));
         assert!(script.contains("\"label\":\"Home\""));
+        assert!(script.contains("\"segment\":\"projects\""));
         assert!(script.contains("\"area\":\"/projects\""));
     }
 }

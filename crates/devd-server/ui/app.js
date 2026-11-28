@@ -1500,8 +1500,8 @@
   /* The section tabs used to be a second bar under the top one. They are now the
      context panel's list, so this only keeps the old bar out of the way. */
   function subnav() {
-    var box = el("subnav");
-    if (box) { box.hidden = true; box.innerHTML = ""; }
+    // The area's tabs are the window's (`shell.js`, from `window.DEVD_AREAS`); there is no page
+    // element of its own to empty.
     paintPanel();
   }
 
@@ -1778,91 +1778,10 @@
      menu would close, its popover animation would replay, and a focused tab
      would lose focus. The last markup is kept, and the bar is left alone while
      a menu is open; closing the menu repaints it. */
-  var RAIL_CACHE = { html: null, attn: null };
-
-  /* The rail: where you are.
-   *
-   * One column of destinations down the left edge, each an icon with its name under
-   * it, in the order work flows: the day (Home, Inbox), who does the thinking
-   * (Assistant, Agent runs, Team), what is being built (Projects, Sites), and the
-   * machine under it. The records and settings sit at the foot with the machine's
-   * health. On a phone the rail is a bar along the bottom with the five places used
-   * most and a More sheet for the rest.
-   */
   function rail(force) {
-    var attention = (AI.counts.approvals + AI.counts.questions) || 0;
-    // Only the person's own conversations count for the Assistant: a specialist
-    // is part of a run, and counting it in both buttons made the two disagree.
-    var threads = (AI.threads || []).filter(function (t) { return threadRole(t) === "devd"; });
-    var working = threads.filter(function (t) { return t.state === "running"; }).length;
-    var waitThreads = threads.filter(function (t) { return t.state === "waiting_approval"; }).length;
-    var badThreads = threads.filter(function (t) { return t.state === "error"; }).length;
-    var runs = (state.view === "team" && TEAM.runs && TEAM.runs.length) ? TEAM.runs : (AI.liveRuns || (AI.home && AI.home.teamRuns) || []);
-    var live = runs.filter(function (t) { return ["planning", "running"].indexOf(t.state) >= 0; });
-    var waitRuns = runs.filter(function (t) { return t.state === "awaiting_plan" || t.state === "paused"; }).length;
-    var badRuns = runs.filter(function (t) { return t.state === "failed"; }).length;
-    // The rail says what is happening now, not only how many records exist:
-    // blue counts work in flight, amber counts a plan or a paused run waiting
-    // for the person, red counts a run that stopped. The same rule is used for
-    // the Assistant, whose badge is its live conversations.
-    var runsBadge = waitRuns + badRuns || live.length;
-    var runsTone = badRuns ? "bad" : waitRuns ? "warn" : "live";
-    var asstBadge = waitThreads + badThreads || working;
-    var asstTone = badThreads ? "bad" : waitThreads ? "warn" : "live";
-    var runsHint = ["Runs", live.length ? live.length + " working" : "", waitRuns ? waitRuns + " waiting for you" : "", badRuns ? badRuns + " failed" : ""].filter(Boolean).join(" · ");
-    var asstHint = ["Assistant", working ? working + " working" : "", waitThreads ? waitThreads + " waiting for you" : "", badThreads ? badThreads + " stopped" : ""].filter(Boolean).join(" · ");
-    var health = AI.health && AI.health.state;
-    var here = areaOf(state.view);
-    var items = [
-      { view: "home", area: "home", label: "Home", icon: "i-home", phone: true },
-      { view: "inbox", area: "inbox", label: "Inbox", icon: "i-inbox", badge: attention, phone: true },
-      { sep: true },
-      { view: "assistant", area: "assistant", label: "Assistant", icon: "i-spark", live: working > 0, badge: asstBadge, badgeTone: asstTone, hint: asstHint, phone: true },
-      { view: "team", area: "runs", label: "Runs", icon: "i-layers", live: live.length > 0, badge: runsBadge, badgeTone: runsTone, hint: runsHint, phone: true },
-      { view: "agents", area: "agents", label: "Team", icon: "i-team" },
-      { view: "providers", area: "providers", label: "Intelligence", icon: "i-sliders" },
-      { sep: true },
-      { view: "projects", area: "projects", label: "Projects", icon: "i-folder" },
-      { view: "sites", area: "sites", label: "Sites", icon: "i-globe" },
-      { view: "overview", area: "server", label: "Server", icon: "i-server" }
-    ];
-    var foot = [
-      { view: "activity", area: "activity", label: "Activity", icon: "i-clock" },
-      { view: "capabilities", area: "capabilities", label: "API", icon: "i-code" },
-      { view: "system", area: "system", label: "Diagnostics", icon: "i-gauge", dot: health === "critical" || health === "unavailable" ? "bad" : health === "degraded" || health === "setup_incomplete" ? "warn" : "" }
-    ];
-    function item(i, small) {
-      if (i.sep) return '<span class="rail-sep" aria-hidden="true"></span>';
-      var on = here === i.area;
-      return '<button type="button" class="rail-item' + (small ? " rail-small" : "") + (on ? " active" : "") + (i.phone ? " rail-phone" : "") + '" data-action="rail-go" data-view="' + i.view + '"' +
-        (on ? ' aria-current="page"' : "") + ' title="' + attr(i.hint || i.label) + '">' +
-        '<span class="rail-icon"><svg class="icon" aria-hidden="true"><use href="#' + i.icon + '"></use></svg>' +
-        // One indicator, never two: the count badge already says the state (blue
-        // working, amber waiting, red stopped), so the live dot only appears on
-        // items that have no count. Drawing both put two circles on one icon.
-        (i.badge
-          ? '<span class="rail-badge rail-badge-' + attr(i.badgeTone || "live") + '">' + esc(i.badge > 99 ? "99+" : i.badge) + "</span>"
-          : i.live
-            ? '<span class="rail-live" aria-label="working"></span>'
-            : i.dot
-              ? '<span class="rail-dot rail-dot-' + i.dot + '"></span>'
-              : "") +
-        '</span><span class="rail-label">' + esc(i.label) + "</span></button>";
-    }
-    var html =
-      // The mark is the one picture the window, the taskbar and the favicon share.
-      '<button type="button" class="rail-brand" data-action="rail-go" data-view="home" title="devd"><img src="' + attr((el("brand-logo") || {}).src || "/favicon.svg") + '" alt="devd" width="26" height="26"></button>' +
-      '<button type="button" class="rail-item rail-search" data-action="palette" title="Search or run anything (Ctrl K)" aria-label="Search or run anything"><span class="rail-icon"><svg class="icon" aria-hidden="true"><use href="#i-search"></use></svg></span><span class="rail-label">Search</span></button>' +
-      '<div class="rail-main">' + items.map(function (i) { return item(i, false); }).join("") + "</div>" +
-      '<div class="rail-foot">' + foot.map(function (i) { return item(i, true); }).join("") + "</div>" +
-      '<div class="rail-sheet" role="group" aria-label="More places">' + items.concat(foot).filter(function (i) { return !i.sep && !i.phone; }).map(function (i) { return item(i, false); }).join("") + "</div>" +
-      '<button type="button" class="rail-item rail-more" data-action="rail-more" aria-expanded="' + (state.railMore ? "true" : "false") + '" title="More"><span class="rail-icon"><svg class="icon" aria-hidden="true"><use href="#i-menu"></use></svg></span><span class="rail-label">More</span></button>';
-    if (force || html !== RAIL_CACHE.html) {
-      morph(el("rail"), html);
-      RAIL_CACHE.html = html;
-    }
-    var shell = document.querySelector(".shell");
-    if (shell) shell.classList.toggle("rail-more-open", !!state.railMore);
+    // The rail is the window's now: `shell.js` draws it from `window.DEVD_RAIL`, the list the
+    // native window draws from. This name stays because every screen calls it on every draw.
+    void force;
   }
 
   /* The path above the page, only when it says something the title and the tabs do not: a project is
@@ -1882,7 +1801,7 @@
     }
     if (html === CRUMBS_HTML) return;
     CRUMBS_HTML = html;
-    el("crumbs").innerHTML = html;
+    // The window's top bar draws the crumb (`shell.js`, told by `tellFrame`): nothing to write here.
   }
 
   var STATUS_HTML = null;
@@ -1928,7 +1847,8 @@
     var html = '<div class="sb-left"><button type="button" class="health health-checking" id="health-chip" data-action="health-open" title="System health"></button><span class="sb-sep" aria-hidden="true">·</span>' + (left.join('<span class="sb-sep" aria-hidden="true">·</span>') || "Ready") + '</div><div class="sb-right">' + right.join('<span class="sb-sep" aria-hidden="true">·</span>') + "</div>";
     if (html !== STATUS_HTML) {
       STATUS_HTML = html;
-      el("statusbar").innerHTML = html;
+      // The strip is the window's (`/api/chrome` → `shell.js`); what the page's strip would have
+      // said is kept for the health chip's own state and nothing is written into the document.
     }
     healthChip();
   }
@@ -12624,6 +12544,86 @@ var TERM_POLL_MS = 250;
       '<div class="inline" style="margin-top:16px;justify-content:center">' + links + "</div></div></div>";
   }
 
+  /* The window's frame, in place of the page's own.
+   *
+   * The rail, the top bar and the status strip are drawn by `shell.js` from the window's data.
+   * This keeps the page side of that bargain: the old rail and top bar leave the document so no
+   * second frame can show, the screens draw into the window's `#screen`, and the frame is told
+   * where the page is so its crumb and its rail light up the same place the window would.
+   */
+  var FRAME = { at: "" };
+  // The page's old rail and top bar are already gone from the document (the window's frame is all
+  // there is), so `render` has nothing to retire on a repaint.
+  function tellFrame() {
+    var shell = window.DEVD_SHELL;
+    if (!shell) return;
+    // The screen's address, as the window names it: `/runs`, `/team`, `/projects/...`, `/assistant/...`.
+    // The page keeps some addresses of its own (`/agents/runs`, `/agents/team`, `/models`); they are
+    // translated here, so the crumb and the rail read the window's words rather than the page's.
+    var WINDOW_PATH = {
+      home: "/", inbox: "/inbox", assistant: "/assistant", team: "/runs", agents: "/team",
+      projects: "/projects", sites: "/sites", overview: "/server", services: "/server", operations: "/server",
+      toolchain: "/server", runtimes: "/server", databases: "/server", remote: "/server", preview: "/server",
+      hosts: "/sites", certificates: "/sites", mail: "/sites", providers: "/intelligence",
+      activity: "/activity", capabilities: "/api-tools", system: "/settings",
+      skills: "/skills", schedules: "/schedules", automations: "/automations", shared: "/notes", mcp: "/mcp"
+    };
+    var path = WINDOW_PATH[state.view] || (location.pathname.replace(/\/+$/, "") || "/");
+    if (state.view === "project" && state.project) path = "/projects/" + encodeURIComponent(state.project.path);
+    if (state.view === "site" && SITE.name) path = "/sites/" + encodeURIComponent(SITE.name);
+    if (state.view === "assistant" && AI.thread && AI.thread.id) path = "/assistant/" + encodeURIComponent(AI.thread.id);
+    var frames = window.DEVD_FRAMES || null;
+    var fields;
+    if (frames && frames[path]) {
+      // Asked of the server (`/api/frame`, from the window's own crumb rule): the area first for a
+      // page of an area, then the screen's name and what is selected.
+      var f = frames[path];
+      fields = { path: path, rail: f.rail, crumb: f.title, parent: f.parent || null, selection: f.selection || "", area: f.area || "" };
+      fields.current = f.rail;
+      var big = (window.DEVD_RAIL || []).filter(function (r) { return r.segment === f.rail; })[0];
+      fields.area = big && big.area ? big.area : "";
+    } else {
+      // Until the answer arrives: the rail entry's own name.
+      var area = areaOf(state.view);
+      var item = (window.DEVD_RAIL || []).filter(function (r) { return r.segment === area; })[0];
+      fields = { path: path, current: area, area: item && item.area ? item.area : "", crumb: item ? item.label : "Home", parent: null, selection: "" };
+      if (state.view === "project" && state.project) fields.selection = state.project.name || "";
+      if (state.view === "site" && SITE.name) fields.selection = SITE.name;
+      askFrame(path, fields.selection);
+    }
+    // A project's page lights Projects; so does a page that is one of an area's.
+    var railItem = (window.DEVD_RAIL || []).filter(function (r) { return r.segment === fields.current; })[0];
+    fields.current = railItem ? railItem.segment : fields.current;
+    var key = JSON.stringify(fields);
+    if (FRAME.at === key) return;
+    FRAME.at = key;
+    shell.update(fields);
+  }
+
+  /* Ask the server what the window's crumb says for `path` (`devd_app_core::frame`), once per
+   * address, and tell the frame when the answer arrives. The selected name is the page's, because
+   * a folder's name or a conversation's title is what it knows and the route cannot. */
+  function askFrame(path, selection) {
+    window.DEVD_FRAMES = window.DEVD_FRAMES || {};
+    window.DEVD_FRAME_ASKED = window.DEVD_FRAME_ASKED || {};
+    var key = path + "|" + (selection || "");
+    if (window.DEVD_FRAME_ASKED[key]) return;
+    window.DEVD_FRAME_ASKED[key] = true;
+    var url = "/api/frame?path=" + encodeURIComponent(path) + (selection ? "&selection=" + encodeURIComponent(selection) : "");
+    fetch(url, { headers: { Authorization: "Bearer " + TOKEN } })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (f) {
+        if (!f) return;
+        window.DEVD_FRAMES[path] = f;
+        // The screen may have changed while the answer was on its way: only the frame in front.
+        if ((location.pathname.replace(/\/+$/, "") || "/") === (path.split("?")[0] === "/" ? "/" : path.split("/").slice(0, 2).join("/")) || location.pathname.indexOf(path) === 0 || path === "/") {
+          FRAME.at = "";
+          tellFrame();
+        }
+      })
+      .catch(function () { /* the entry's own name stays */ });
+  }
+
   function render() {
     // The shell is read on a timer only while its screen is on show.
     if (!termOnScreen()) termStopPolling();
@@ -12631,6 +12631,7 @@ var TERM_POLL_MS = 250;
     subnav();
     crumbs();
     statusbar();
+    tellFrame();
     healthChip();
     if (SERVER_VIEWS.indexOf(state.view) !== -1) {
       if (!state.server.loaded && state.view !== "toolchain") return renderLoadingServer();

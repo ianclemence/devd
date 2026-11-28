@@ -100,6 +100,61 @@ impl Theme {
     /// Every theme, in the order the picker shows them: three for the evening, then two for the day.
     pub const ORDER: [&'static str; 5] = ["sling", "dawn", "psalm", "sharon", "daybreak"];
 
+    /// This theme as the browser client paints it: its name, whether it is dark, and every colour
+    /// token under the window's own names. The page is a replica of the window, so it is given the
+    /// window's palette rather than one of its own. Written to `ui-themes.json` by a test, which
+    /// `devd-server` compiles in; see `every_theme_is_written_for_the_page` below.
+    pub fn to_page(&self) -> serde_json::Value {
+        // The page takes CSS colours, so the window's colours are given in the form it reads.
+        let c = |colour: gpui::Hsla| -> String {
+            let rgba = colour.to_rgb();
+            format!(
+                "rgba({}, {}, {}, {:.3})",
+                (rgba.r * 255.0).round() as u8,
+                (rgba.g * 255.0).round() as u8,
+                (rgba.b * 255.0).round() as u8,
+                rgba.a
+            )
+        };
+        let mut colours = serde_json::Map::new();
+        for (name, colour) in [
+            ("bg", self.bg),
+            ("surface", self.surface),
+            ("raised", self.raised),
+            ("hover", self.hover),
+            ("active", self.active),
+            ("line", self.line),
+            ("line-strong", self.line_strong),
+            ("text", self.text),
+            ("muted", self.muted),
+            ("faint", self.faint),
+            ("accent", self.accent),
+            ("on-accent", self.on_accent),
+            ("accent-soft", self.accent_soft),
+            ("ok", self.ok),
+            ("warn", self.warn),
+            ("danger", self.danger),
+            ("info", self.info),
+            ("selection", self.selection),
+            ("scrim", self.scrim),
+            ("code", self.code),
+            ("diff-added", self.diff_added),
+            ("diff-added-word", self.diff_added_word),
+            ("diff-removed", self.diff_removed),
+            ("diff-removed-word", self.diff_removed_word),
+        ] {
+            colours.insert(name.to_string(), serde_json::Value::String(c(colour)));
+        }
+        serde_json::json!({
+            "id": self.id,
+            "name": self.name,
+            "dark": self.dark,
+            "colours": colours,
+            "art": if self.art.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(self.art.to_string()) },
+            "art_strength": self.art_strength,
+        })
+    }
+
     /// A built-in theme by id. An unknown id is Sling.
     pub fn by_id(id: &str) -> Self {
         match id {
@@ -622,6 +677,32 @@ mod tests {
         for (name, value) in window {
             let found = devd_app_core::size::find(name).unwrap_or_else(|| panic!("{name} is not in the shared table"));
             assert_eq!(found.px, *value, "{name}");
+        }
+    }
+
+    /// Write the window's five palettes for the browser client (`devd-server` compiles the file in
+    /// and serves it as `window.DEVD_THEMES`). A test rather than a build script, so the file is
+    /// produced by the same code that draws the window, and a change to a palette shows up as a
+    /// modified file in the change it came with.
+    #[test]
+    fn every_theme_is_written_for_the_page() {
+        let mut out = serde_json::Map::new();
+        for id in Theme::ORDER {
+            let theme = Theme::by_id(id);
+            out.insert(id.to_string(), theme.to_page());
+        }
+        // A sandboxed build may only write inside `target`; then the file is written there for a
+        // person (or a later step) to copy in, and the check below still runs on what was built.
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("ui-themes.json");
+        let text = serde_json::to_string_pretty(&serde_json::Value::Object(out.clone())).unwrap() + "\n";
+        let written = std::fs::write(&path, &text);
+        if written.is_err() {
+            let out_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join("target");
+            let _ = std::fs::write(out_dir.join("ui-themes.json"), text);
+        }
+        assert_eq!(out.len(), 5);
+        for id in Theme::ORDER {
+            assert!(out[id]["colours"]["bg"].is_string(), "{id} has no palette");
         }
     }
 

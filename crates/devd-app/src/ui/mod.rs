@@ -110,27 +110,9 @@ pub fn live_dot(_id: impl Into<ElementId>, tone: Tone, cx: &App) -> impl IntoEle
 /// top bar and beside its name. Known roles keep a hue of their own; any other role (a custom one) gets one from its name,
 /// the same every time.
 pub fn role_color(role: &str, cx: &App) -> Hsla {
-    let hue = match role {
-        "planner" => 0.76,
-        "product" => 0.83,
-        "architect" => 0.66,
-        "designer" | "motion" => 0.92,
-        "frontend" => 0.58,
-        "backend" => 0.47,
-        "implementer" => 0.60,
-        "qa" => 0.34,
-        "security" => 0.01,
-        "reviewer" => 0.08,
-        "docs" | "content" => 0.12,
-        other => {
-            // FNV-1a over the name, so a custom role keeps its colour from one run to the next.
-            let mut h: u32 = 0x811c_9dc5;
-            for b in other.bytes() {
-                h = (h ^ u32::from(b)).wrapping_mul(0x0100_0193);
-            }
-            (h % 360) as f32 / 360.0
-        }
-    };
+    // The hue is the rule both interfaces share (`devd_app_core::chrome`); only how dark the
+    // window draws it is the theme's business.
+    let hue = devd_app_core::chrome::role_hue(role);
     let dark = theme(cx).dark;
     gpui::hsla(hue, 0.58, if dark { 0.68 } else { 0.38 }, 1.0)
 }

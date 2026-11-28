@@ -22,6 +22,7 @@ use axum::body::{Body, Bytes};
 use axum::extract::{Path, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
+use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use crate::{AppState, INSTANCE_HEADER};
@@ -32,6 +33,12 @@ const INDEX: &str = include_str!("../ui/index.html");
 const SCRIPT: &str = include_str!("../ui/app.js");
 /// Design tokens and layout.
 const STYLE: &str = include_str!("../ui/style.css");
+/// The window's frame (rail, top bar, status strip).
+const SHELL_STYLE: &str = include_str!("../ui/shell.css");
+/// The screens re-pointed at the window's palette and sizes.
+const SCREEN_STYLE: &str = include_str!("../ui/screen.css");
+/// The page's frame: the rail, the top bar and the status strip, drawn from the window's data.
+const SHELL_SCRIPT: &str = include_str!("../ui/shell.js");
 /// Window icon.
 const FAVICON: &str = include_str!("../ui/favicon.svg");
 /// The interface typeface (Inter Tight, a variable font, SIL Open Font License).
@@ -100,6 +107,9 @@ fn packed(slot: &'static OnceLock<Packed>, bytes: &'static [u8]) -> &'static Pac
 
 static SCRIPT_PACKED: OnceLock<Packed> = OnceLock::new();
 static STYLE_PACKED: OnceLock<Packed> = OnceLock::new();
+static SHELL_STYLE_PACKED: OnceLock<Packed> = OnceLock::new();
+static SCREEN_STYLE_PACKED: OnceLock<Packed> = OnceLock::new();
+static SHELL_SCRIPT_PACKED: OnceLock<Packed> = OnceLock::new();
 static XTERM_JS_PACKED: OnceLock<Packed> = OnceLock::new();
 static XTERM_CSS_PACKED: OnceLock<Packed> = OnceLock::new();
 static ADDON_FIT_PACKED: OnceLock<Packed> = OnceLock::new();
@@ -216,6 +226,92 @@ pub async fn sizes_script(headers: HeaderMap) -> Response {
     asset("text/javascript; charset=utf-8", body.as_bytes(), &PACKED, &headers)
 }
 
+/// The window's icon family, as one SVG sprite: `#win-icon-home`, `#win-icon-search`, ... The page
+/// strokes its own icons from these, so the two interfaces draw one set of shapes.
+pub async fn window_icons(headers: HeaderMap) -> Response {
+    static BODY: OnceLock<String> = OnceLock::new();
+    static PACKED: OnceLock<Packed> = OnceLock::new();
+    let body = BODY.get_or_init(devd_app_core::glyphs::sprite);
+    asset("image/svg+xml", body.as_bytes(), &PACKED, &headers)
+}
+
+/// The window's built-in themes (`window.DEVD_THEMES`), from `devd-app/ui-themes.json`: the file
+/// the window's own theme code writes (see `every_theme_is_written_for_the_page`). The page paints
+/// itself in the palette the window is in, which is the one the person chose under `theme`.
+pub async fn window_themes(headers: HeaderMap) -> Response {
+    static BODY: OnceLock<String> = OnceLock::new();
+    static PACKED: OnceLock<Packed> = OnceLock::new();
+    let body = BODY.get_or_init(|| {
+        const THEMES: &str = include_str!("../../devd-app/ui-themes.json");
+        format!("window.DEVD_THEMES={};", THEMES.trim())
+    });
+    asset("text/javascript; charset=utf-8", body.as_bytes(), &PACKED, &headers)
+}
+
+/// What the frame says right now (`window.DEVD_CHROME`), from `devd_app_core::chrome`: the same
+/// rules the window draws its badges, faces and status strip by.
+pub async fn window_chrome(state: axum::extract::State<std::sync::Arc<crate::AppState>>) -> Response {
+    let state = state.0;
+    let read = |id: &str| -> serde_json::Value {
+        state
+            .registry
+            .dispatch_with(
+                &state.ctx,
+                &devd_core::InvokeRequest { id: id.into(), args: json!({}), dry_run: false },
+                devd_core::capability::Approval::None,
+                &devd_core::DispatchOptions::default(),
+            )
+            .ok()
+            .and_then(|r| r.outcome)
+            .map(|o| o.data)
+            .unwrap_or(serde_json::Value::Null)
+    };
+    let inbox = state
+        .ctx
+        .store
+        .list_inbox(true, 100)
+        .ok()
+        .and_then(|rows| serde_json::to_value(rows).ok())
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default();
+    let health = read("health.status");
+    let runs = read("team.list");
+    let session = json!({
+        "health": health,
+        "inbox": inbox,
+        "runs": runs["runs"].clone(),
+    });
+    let chrome = devd_app_core::chrome::of(
+        &session,
+        &[],
+        state.approvals.len(),
+        env!("CARGO_PKG_VERSION"),
+        None,
+        true,
+    );
+    axum::Json(serde_json::to_value(chrome).unwrap_or(serde_json::Value::Null)).into_response()
+}
+
+/// The frame for the screen at `path` (`GET /api/frame?path=…&selection=…`): the crumb, the rail
+/// segment and what is selected, decided by `devd_app_core::frame`, the rule the window's top bar
+/// follows.
+pub async fn frame_of(axum::extract::Query(q): axum::extract::Query<FrameQuery>) -> Response {
+    let path = q.path.unwrap_or_else(|| "/".to_string());
+    let frame = devd_app_core::frame::of(&path, q.selection.as_deref());
+    axum::Json(serde_json::to_value(frame).unwrap_or(serde_json::Value::Null)).into_response()
+}
+
+/// What the frame asks for.
+#[derive(Debug, serde::Deserialize)]
+pub struct FrameQuery {
+    /// The screen's address, as the page shows it.
+    #[serde(default)]
+    path: Option<String>,
+    /// The name of what is selected, when the page knows it better than the route does.
+    #[serde(default)]
+    selection: Option<String>,
+}
+
 /// The rail of screens (`window.DEVD_RAIL`), from `devd_app_core::pages::RAIL`, the list the native
 /// window draws its own rail from. Both interfaces therefore show the same screens in the same
 /// order, and a screen added to one is in both.
@@ -255,6 +351,21 @@ pub async fn areas(headers: HeaderMap) -> Response {
         out
     });
     asset("text/javascript; charset=utf-8", body.as_bytes(), &PACKED, &headers)
+}
+
+/// The window's frame: the rail, the top bar and the status strip.
+pub async fn shell_style(headers: HeaderMap) -> Response {
+    asset("text/css; charset=utf-8", SHELL_STYLE.as_bytes(), &SHELL_STYLE_PACKED, &headers)
+}
+
+/// The page's frame script: the rail, the top bar and the status strip, drawn from the window's data.
+pub async fn shell_script(headers: HeaderMap) -> Response {
+    asset("text/javascript; charset=utf-8", SHELL_SCRIPT.as_bytes(), &SHELL_SCRIPT_PACKED, &headers)
+}
+
+/// The screens, in the window's palette: loaded after style.css and replacing its values.
+pub async fn screen_style(headers: HeaderMap) -> Response {
+    asset("text/css; charset=utf-8", SCREEN_STYLE.as_bytes(), &SCREEN_STYLE_PACKED, &headers)
 }
 
 /// The stylesheet.

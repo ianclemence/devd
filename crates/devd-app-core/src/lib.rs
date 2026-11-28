@@ -24,9 +24,12 @@
 //! the surfaces are views of it.
 
 pub mod command;
+pub mod chrome;
 pub mod diff;
 pub mod flow;
+pub mod frame;
 pub mod fuzzy;
+pub mod glyphs;
 pub mod links;
 pub mod markdown;
 pub mod motion;
