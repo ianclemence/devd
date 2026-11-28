@@ -305,16 +305,22 @@
    * on each change too, and a frame answered while the page was still arriving drew "Checking the
    * machine…" and a strip with no version, which then stood for as long as that screen was on.
    * An answer that names no version is half-arrived, and is not kept. */
-  async function sync() {
+  async function sync(first) {
     try {
-      var res = await fetch("/api/chrome", { headers: { Authorization: "Bearer " + token() } });
+      var res = await fetch("/api/chrome", { headers: { Authorization: "Bearer " + token() }, cache: first ? "no-store" : "default" });
       if (res.ok) {
         var chrome = await res.json();
-        if (chrome.version) {
+        // While the page is still arriving, keep what the banner said until a real answer comes.
+        if (chrome.version && !(first && chrome.strip && chrome.strip.tone === "neutral")) {
           Shell.badges = chrome.badges || Shell.badges || {};
           Shell.version = chrome.version;
           if (chrome.strip) {
-            Shell.health = { tone: chrome.strip.tone, headline: chrome.strip.headline };
+            // "Checking" is what the window says in its first second, not a state to carry: a
+            // frame that answers with it keeps the last thing the person was told instead.
+            var tone = chrome.strip.tone === "neutral" ? (Shell.strip && Shell.strip.tone) || chrome.strip.tone : chrome.strip.tone;
+            var headline = chrome.strip.tone === "neutral" ? (Shell.strip && Shell.strip.headline) || chrome.strip.headline : chrome.strip.headline;
+            Shell.health = { tone: tone, headline: headline };
+            Shell.strip = { tone: tone, headline: headline };
             Shell.working = chrome.strip.working;
             Shell.waiting = chrome.strip.waiting;
           }
@@ -365,13 +371,13 @@
       // Draw once the icons are in the document: a rail of empty boxes that fills in a moment
       // later reads as a fault, and a cached sprite makes that a frame or two.
       ICONS.then(render);
-      sync();
+      sync(true);
       // The window's strip is about what is happening now; it is asked again on the same slow
       // beat the window reads its own records.
       setInterval(sync, 15000);
     });
   } else {
     ICONS.then(render);
-    sync();
+    sync(true);
   }
 })();
