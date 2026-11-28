@@ -104,6 +104,9 @@ impl Theme {
     /// token under the window's own names. The page is a replica of the window, so it is given the
     /// window's palette rather than one of its own. Written to `ui-themes.json` by a test, which
     /// `devd-server` compiles in; see `every_theme_is_written_for_the_page` below.
+    /// (Used by `every_theme_is_written_for_the_page`; kept public because it describes the
+    /// palette rather than any one test's expectation of it.)
+    #[allow(dead_code)]
     pub fn to_page(&self) -> serde_json::Value {
         // The page takes CSS colours, so the window's colours are given in the form it reads.
         let c = |colour: gpui::Hsla| -> String {
