@@ -10,6 +10,19 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.45.1] - 2026-11-28 - The window fits its screen
+
+### Fixed
+
+- **The window opens inside the screen.** It was asked for a fixed 1360x860 wherever it ran;
+  on a smaller display it ran off the right edge and its search and lists were cut away. It now
+  opens at that size, or the display's width less a margin, and its minimum size is clamped the
+  same way.
+- **A shortcut is drawn as keys, not as one word.** The search field read `ctrl+k` in a single
+  box; it now reads Ctrl + K, one box per key, and a key's symbol (⌘, ⌥) is drawn from the
+  system's symbol face instead of appearing as a box.
+
+---
 ## [0.45.0] - 2026-11-28 - Two boxes, one table
 
 ### Fixed
