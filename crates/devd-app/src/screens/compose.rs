@@ -16,12 +16,13 @@ use std::path::{Path, PathBuf};
 use devd_app_core::nav::Route;
 use devd_app_core::sync::Mutation;
 use gpui::{
-    AnyElement, ClickEvent, Context, FontWeight, PathPromptOptions, deferred, div, prelude::*, px,
-    relative,
+    AnyElement, ClickEvent, Context, FontWeight, MouseButton, PathPromptOptions, deferred, div,
+    prelude::*, px, relative,
 };
 use serde_json::{json, Value};
 
 use crate::shell::Shell;
+use crate::ui::input::TextInput;
 use crate::state::{devd, q};
 use crate::theme::{mono, size, theme};
 use crate::ui::{self, Button, ButtonKind, icon};
@@ -127,9 +128,10 @@ fn dismissable(menu: gpui::Div, which: Open, cx: &mut Context<Shell>) -> impl In
     let menu = menu
         .id(gpui::ElementId::Name(name.clone().into()))
         .on_mouse_down_out(cx.listener(move |this, _, _, cx| {
-            if this.compose.open == which {
-                this.compose.open = Open::Nothing;
-                this.compose.dismissed = Some((which, std::time::Instant::now()));
+            let compose = this.compose_of(this.front_screen());
+            if compose.open == which {
+                compose.open = Open::Nothing;
+                compose.dismissed = Some((which, std::time::Instant::now()));
                 cx.notify();
             }
         }));
@@ -271,8 +273,8 @@ pub fn completion(text: &str, cx: &gpui::App) -> Option<(Trigger, Vec<Entry>)> {
 }
 
 /// The model the next message uses, in words.
-fn model_label(shell: &Shell, providers: &[Value]) -> String {
-    if let Some((_, model)) = &shell.compose.model {
+fn model_label(held: &Compose, providers: &[Value]) -> String {
+    if let Some((_, model)) = &held.model {
         return model.clone();
     }
     providers
@@ -285,8 +287,8 @@ fn model_label(shell: &Shell, providers: &[Value]) -> String {
 }
 
 /// The provider of the model the next message uses: its id and its name.
-fn model_provider(shell: &Shell, providers: &[Value]) -> (String, String) {
-    let found = match &shell.compose.model {
+fn model_provider(held: &Compose, providers: &[Value]) -> (String, String) {
+    let found = match &held.model {
         Some((id, _)) => providers.iter().find(|p| p["id"].as_str() == Some(id)),
         None => providers
             .iter()
@@ -474,13 +476,21 @@ fn popover(cx: &gpui::App, below: bool) -> gpui::Div {
 /// The message box, its menus and the row of choices under it.
 pub fn view(
     shell: &Shell,
+    screen: crate::shell::ComposerScreen,
     hint: &'static str,
     widest: f32,
     cx: &mut Context<Shell>,
 ) -> AnyElement {
     let t = theme(cx).clone();
-    let text = shell.composer.read(cx).text().to_string();
-    let compose = &shell.compose;
+    // The screen this box is drawn on, kept where the box's own buttons can find it: the Assistant's
+    // box and Home's are separate controls with separate attachments and choices.
+    shell.composer_screen.set(screen);
+    let input = shell.composer_of(screen);
+    let text = input.read(cx).text().to_string();
+    let compose = match screen {
+        crate::shell::ComposerScreen::Home => &shell.compose,
+        crate::shell::ComposerScreen::Assistant => &shell.chat_compose,
+    };
     let inventory = devd(cx).sync.watch(&q::inventory());
     let providers: Vec<Value> = inventory.list("/providers").to_vec();
     let sendable = !text.trim().is_empty();
@@ -536,7 +546,7 @@ pub fn view(
                         )
                         .on_click(cx.listener(
                             move |this, _: &ClickEvent, _, cx| {
-                                let now = this.composer.read(cx).text().to_string();
+                                let now = holding(this).read(cx).text().to_string();
                                 let text = accept(&now, &from, &insert);
                                 this.composer
                                     .update(cx, |input, cx| input.set_text(text, cx));
@@ -610,7 +620,7 @@ pub fn view(
                     .py(px(4.0))
                     .child(ui::eyebrow("MODEL", cx)),
             );
-            let current = model_label(shell, &providers);
+            let current = model_label(compose, &providers);
             let mut shown = 0;
             // Providers with a key, and the default one even without: its models are what
             // the next message would use, and a row that says it needs a key beats an empty list.
@@ -652,9 +662,9 @@ pub fn view(
                         )
                         .on_click(cx.listener(
                             move |this, _: &ClickEvent, _, cx| {
-                                this.compose.open = Open::Nothing;
+                                held(this).open = Open::Nothing;
                                 if ready {
-                                    this.compose.model = Some((p2.clone(), m2.clone()));
+                                    held(this).model = Some((p2.clone(), m2.clone()));
                                     cx.notify();
                                 } else {
                                     // It cannot answer without a key: go where one is added.
@@ -686,7 +696,7 @@ pub fn view(
                     cx,
                 )
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                    this.compose.open = Open::Nothing;
+                    held(this).open = Open::Nothing;
                     this.go(Route::Intelligence, cx);
                 })),
             );
@@ -715,7 +725,7 @@ pub fn view(
                             ButtonKind::Ghost
                         })
                         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            this.compose.effort = Some(pick);
+                            held(this).effort = Some(pick);
                             cx.notify();
                         })),
                 );
@@ -743,8 +753,8 @@ pub fn view(
                     )
                     .on_click(cx.listener(
                         move |this, _: &ClickEvent, _, cx| {
-                            this.compose.mode = Some(pick);
-                            this.compose.open = Open::Nothing;
+                            held(this).mode = Some(pick);
+                            held(this).open = Open::Nothing;
                             cx.notify();
                         },
                     )),
@@ -755,40 +765,81 @@ pub fn view(
         Open::Nothing => {}
     }
 
-    // The box: files attached, the text, and the buttons.
+    // The box: files attached, the text, and the buttons. A picture is shown as itself, the way
+    // the page's composer shows it: a thumbnail with its name and a press to open it full size.
+    // Anything else keeps its file mark and its name.
     let mut files = div().flex().flex_wrap().gap(px(6.0));
     for (n, file) in compose.files.iter().enumerate() {
         let name = file
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| file.display().to_string());
-        let kind = if file.is_dir() { "folder" } else { "file" };
-        files = files.child(
-            div()
-                .h(px(26.0))
-                .pl(px(8.0))
-                .pr(px(4.0))
-                .flex()
-                .items_center()
-                .gap(px(6.0))
-                .rounded(px(size::RADIUS))
-                .border_1()
-                .border_color(t.line)
-                .bg(t.surface)
-                .text_size(px(size::TEXT_SM))
-                .child(icon(kind, 13.0, t.faint))
-                .child(div().max_w(px(180.0)).child(ui::Clip::new(name)))
-                .child(
-                    Button::icon_only(ui::nid("compose.unattach", n), "x").on_click(cx.listener(
-                        move |this, _: &ClickEvent, _, cx| {
-                            if n < this.compose.files.len() {
-                                this.compose.files.remove(n);
-                            }
-                            cx.notify();
-                        },
-                    )),
-                ),
+        let attach = Button::icon_only(ui::nid("compose.unattach", n), "x").on_click(
+            cx.listener(move |this, _: &ClickEvent, _, cx| {
+                if n < held(this).files.len() {
+                    held(this).files.remove(n);
+                }
+                cx.notify();
+            }),
         );
+        let chip = match preview(file) {
+            Some(picture) => {
+                let open = file.clone();
+                div()
+                    .w(px(74.0))
+                    .rounded(px(size::RADIUS))
+                    .border_1()
+                    .border_color(t.line)
+                    .bg(t.surface)
+                    .overflow_hidden()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .w_full()
+                            .h(px(56.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .bg(t.bg)
+                            .cursor_pointer()
+                            .on_mouse_down(MouseButton::Left, cx.listener(move |_this, _: &gpui::MouseDownEvent, _, cx| {
+                                cx.open_with_system(&open);
+                            }))
+                            .child(gpui::img(gpui::ImageSource::Render(picture)).size_full().object_fit(gpui::ObjectFit::Contain)),
+                    )
+                    .child(
+                        div()
+                            .px(px(4.0))
+                            .py(px(2.0))
+                            .flex()
+                            .items_center()
+                            .gap(px(2.0))
+                            .text_size(px(size::TEXT_XS))
+                            .child(div().flex_1().min_w_0().child(ui::Clip::new(name)))
+                            .child(attach),
+                    )
+            }
+            None => {
+                let kind = if file.is_dir() { "folder" } else { "file" };
+                div()
+                    .h(px(26.0))
+                    .pl(px(8.0))
+                    .pr(px(4.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .rounded(px(size::RADIUS))
+                    .border_1()
+                    .border_color(t.line)
+                    .bg(t.surface)
+                    .text_size(px(size::TEXT_SM))
+                    .child(icon(kind, 13.0, t.faint))
+                    .child(div().max_w(px(180.0)).child(ui::Clip::new(name)))
+                    .child(attach)
+            }
+        };
+        files = files.child(chip);
     }
     let mut boxed = div()
         .px(px(8.0))
@@ -807,7 +858,7 @@ pub fn view(
     }
     let plus = Button::icon_only("compose.plus", "plus").on_click(cx.listener(
         |this, _: &ClickEvent, _, cx| {
-            this.compose.toggle(Open::Plus);
+            held(this).toggle(Open::Plus);
             cx.notify();
         },
     ));
@@ -815,7 +866,7 @@ pub fn view(
         .flex_1()
         .min_w_0()
         .py(px(3.0))
-        .child(shell.composer.clone());
+        .child(input.clone());
     // Next to send: hand this message to the team instead. A project-shaped request used to
     // become a single agent's conversation with no plan, no worktree and no verdict, because
     // the only way to start a run was to know the phrase "have the team ..." - this is the
@@ -823,7 +874,7 @@ pub fn view(
     let team = Button::new("composer.team", "Team")
                     .disabled(!sendable)
                     .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                        let goal = this.composer.read(cx).text().trim().to_string();
+                        let goal = holding(this).read(cx).text().trim().to_string();
                         if goal.is_empty() {
                             return;
                         }
@@ -850,7 +901,7 @@ pub fn view(
     // box's whole width and the buttons sit in a row of their own under it, as in every editor people write long
     // prompts in: beside the text, they took a column out of every line of a long message.
     let stacked = !text.is_empty()
-        && (compose.stacked.get() || text.contains('\n') || shell.composer.read(cx).rows() > 1);
+        && (compose.stacked.get() || text.contains('\n') || input.read(cx).rows() > 1);
     compose.stacked.set(stacked);
     if stacked {
         boxed = boxed.child(field).child(
@@ -887,7 +938,7 @@ pub fn view(
             })
             .kind(ButtonKind::Ghost)
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                this.compose.toggle(open);
+                held(this).toggle(open);
                 cx.notify();
             }))
     };
@@ -904,7 +955,7 @@ pub fn view(
         .unwrap_or("Auto");
     let mut under = div().px(px(2.0)).flex().items_center().gap(px(4.0));
     // The model chip carries its vendor's mark, so which model is answering is seen at a glance.
-    let (provider_id, provider_name) = model_provider(shell, &providers);
+    let (provider_id, provider_name) = model_provider(compose, &providers);
     let model_chip = div()
         .id("compose.model.chip")
         .h(px(size::CONTROL))
@@ -920,10 +971,10 @@ pub fn view(
         .cursor_pointer()
         .hover(|s| s.bg(t.hover))
         .child(ui::brand(&provider_id, &provider_name, 18.0, cx))
-        .child(format!("{} · {effort}", model_label(shell, &providers)))
+        .child(format!("{} · {effort}", model_label(compose, &providers)))
         .child(icon("chevron-down", 12.0, t.faint))
         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-            this.compose.toggle(Open::Model);
+            held(this).toggle(Open::Model);
             cx.notify();
         }));
     under =
@@ -950,73 +1001,75 @@ impl Shell {
         self.send(window, cx);
     }
 
-    /// The text changed: close any popover, restart the menu at its first row, and
-    /// give the arrows to the menu while one is showing.
-    pub fn compose_changed(&mut self, cx: &mut Context<Self>) {
-        let text = self.composer.read(cx).text().to_string();
+    /// The text of a screen's box changed: close any popover, restart the menu at its first row,
+    /// and give the arrows to the menu while one is showing.
+    pub fn compose_changed(&mut self, screen: crate::shell::ComposerScreen, cx: &mut Context<Self>) {
+        let input = self.composer_of(screen).clone();
+        let text = input.read(cx).text().to_string();
         let showing = completion(&text, cx).is_some();
-        self.composer.update(cx, |input, _| input.steer(showing));
-        self.compose.selected = 0;
-        self.compose.list_scroll.scroll_to_item(0);
-        self.compose.open = Open::Nothing;
+        input.update(cx, |input, _| input.steer(showing));
+        let compose = self.compose_of(screen);
+        compose.selected = 0;
+        compose.list_scroll.scroll_to_item(0);
+        compose.open = Open::Nothing;
         cx.notify();
     }
 
     /// Move the highlight in the `/` or `@` menu.
-    pub fn compose_step(&mut self, by: isize, cx: &mut Context<Self>) {
-        let text = self.composer.read(cx).text().to_string();
+    pub fn compose_step(&mut self, screen: crate::shell::ComposerScreen, by: isize, cx: &mut Context<Self>) {
+        let text = self.composer_of(screen).read(cx).text().to_string();
         if let Some((_, found)) = completion(&text, cx) {
             let n = found.len() as isize;
-            self.compose.selected = (self.compose.selected as isize + by).rem_euclid(n) as usize;
-            self.compose.list_scroll.scroll_to_item(self.compose.selected);
+            let compose = self.compose_of(screen);
+            compose.selected = (compose.selected as isize + by).rem_euclid(n) as usize;
+            compose.list_scroll.scroll_to_item(compose.selected);
             cx.notify();
         }
     }
 
     /// Enter in the box: take the highlighted entry if a menu is showing. True when it did.
-    pub fn compose_pick(&mut self, cx: &mut Context<Self>) -> bool {
-        let text = self.composer.read(cx).text().to_string();
+    pub fn compose_pick(&mut self, screen: crate::shell::ComposerScreen, cx: &mut Context<Self>) -> bool {
+        let input = self.composer_of(screen).clone();
+        let text = input.read(cx).text().to_string();
         let Some((trig, found)) = completion(&text, cx) else {
             return false;
         };
-        let entry = &found[self.compose.selected.min(found.len() - 1)];
-        let next = accept(&text, &trig, &entry.insert);
-        self.composer
-            .update(cx, |input, cx| input.set_text(next, cx));
+        let at = self.compose_of(screen).selected.min(found.len() - 1);
+        let next = accept(&text, &trig, &found[at].insert);
+        input.update(cx, |input, cx| input.set_text(next, cx));
         true
     }
 
     /// Escape in the box: close what is open.
-    pub fn compose_cancel(&mut self, cx: &mut Context<Self>) {
-        self.compose.open = Open::Nothing;
+    pub fn compose_cancel(&mut self, screen: crate::shell::ComposerScreen, cx: &mut Context<Self>) {
+        self.compose_of(screen).open = Open::Nothing;
         cx.notify();
     }
 
-    /// Begin a `/` or `@` word at the end of the message.
-    /// Open a new conversation with `text` in the message box, ready to finish and send. Used where a
-    /// screen hands a task to the assistant, such as Make a theme in Settings.
+    /// Open a new conversation with `text` in the Assistant's box, ready to finish and send. Used
+    /// where a screen hands a task to the assistant, such as Make a theme in Settings.
     pub fn ask_assistant(&mut self, text: &str, window: &mut gpui::Window, cx: &mut Context<Self>) {
         self.go(devd_app_core::nav::Route::Assistant(None), cx);
         let _ = self.sync_draft(cx);
-        let text = text.to_string();
-        self.composer.update(cx, |input, cx| input.set_text(text, cx));
-        window.focus(&gpui::Focusable::focus_handle(self.composer.read(cx), cx));
+        let input = self.chat_composer.clone();
+        input.update(cx, |input, cx| input.set_text(text.to_string(), cx));
+        window.focus(&gpui::Focusable::focus_handle(input.read(cx), cx));
         cx.notify();
     }
 
+    /// Begin a `/` or `@` word at the end of the message, in the box of the screen in front.
     pub fn start_word(&mut self, mark: &str, cx: &mut Context<Self>) {
-        let mut text = self.composer.read(cx).text().to_string();
+        let input = self.composer_of(self.front_screen()).clone();
+        let mut text = input.read(cx).text().to_string();
         if !text.is_empty() && !text.ends_with(char::is_whitespace) {
             text.push(' ');
         }
         text.push_str(mark);
-        self.composer
-            .update(cx, |input, cx| input.set_text(text, cx));
+        input.update(cx, |input, cx| input.set_text(text, cx));
     }
-
     /// Ask for files or folders and attach what is chosen.
     pub fn attach(&mut self, folders: bool, cx: &mut Context<Self>) {
-        self.compose.open = Open::Nothing;
+        self.compose_of(self.front_screen()).open = Open::Nothing;
         let chosen = cx.prompt_for_paths(PathPromptOptions {
             files: !folders,
             directories: folders,
@@ -1027,8 +1080,8 @@ impl Shell {
             if let Ok(Ok(Some(paths))) = chosen.await {
                 this.update(cx, |this, cx| {
                     for path in paths {
-                        if !this.compose.files.contains(&path) {
-                            this.compose.files.push(path);
+                        if !held(this).files.contains(&path) {
+                            held(this).files.push(path);
                         }
                     }
                     cx.notify();
@@ -1039,6 +1092,51 @@ impl Shell {
         .detach();
         cx.notify();
     }
+}
+
+/// A picture read from a path, ready to draw.
+///
+/// Only what really is a picture by its first bytes is decoded, so a file merely named `.png` is
+/// shown as a file rather than as a broken image. Each path is decoded once and kept: a redraw of
+/// the composer must not read and decode the same photograph again.
+fn preview(path: &Path) -> Option<std::sync::Arc<gpui::RenderImage>> {
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex, OnceLock};
+    static SEEN: OnceLock<Mutex<HashMap<std::path::PathBuf, Option<Arc<gpui::RenderImage>>>>> = OnceLock::new();
+    let seen = SEEN.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(map) = seen.lock()
+        && let Some(found) = map.get(path)
+    {
+        return found.clone();
+    }
+    let found = read_picture(path);
+    if let Ok(mut map) = seen.lock() {
+        map.insert(path.to_path_buf(), found.clone());
+    }
+    found
+}
+
+fn read_picture(path: &Path) -> Option<std::sync::Arc<gpui::RenderImage>> {
+    if !path.is_file() {
+        return None;
+    }
+    let bytes = std::fs::read(path).ok()?;
+    // The GPU takes its pixels blue-first, as gpui's own loader gives them.
+    let mut rgba = image::load_from_memory(&bytes).ok()?.into_rgba8();
+    for pixel in rgba.as_chunks_mut::<4>().0 {
+        pixel.swap(0, 2);
+    }
+    Some(std::sync::Arc::new(gpui::RenderImage::new([image::Frame::new(rgba)])))
+}
+
+/// What the box of the screen in front has chosen.
+fn held(shell: &mut Shell) -> &mut Compose {
+    shell.compose_of(shell.front_screen())
+}
+
+/// The box of the screen in front.
+fn holding(shell: &Shell) -> gpui::Entity<TextInput> {
+    shell.composer_of(shell.front_screen()).clone()
 }
 
 /// The name a path is shown by.

@@ -520,6 +520,10 @@ pub fn save(home: &std::path::Path, theme: &Theme) -> std::io::Result<()> {
 }
 
 /// Sizes, in logical pixels. One scale for the whole window.
+///
+/// The numbers themselves live in `devd_app_core::size`, the table the browser client is handed at
+/// startup too, so the window and the page cannot drift apart. These names are the window's own
+/// spelling of that table, and a test there checks each one against it.
 pub mod size {
     /// The rail of screens down the left edge.
     pub const RAIL: f32 = 56.0;
@@ -588,6 +592,38 @@ pub fn mono() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_size_the_window_draws_comes_from_the_shared_table() {
+        // The browser client is handed this same table (`/sizes.js`). A name missing from it, or a
+        // number that differs from the one the window draws, is exactly the drift it exists to stop.
+        let window: &[(&str, f32)] = &[
+            ("rail", size::RAIL),
+            ("topbar", size::TOPBAR),
+            ("status", size::STATUS),
+            ("page", size::PAGE),
+            ("page-wide", size::PAGE_WIDE),
+            ("sidebar", size::SIDEBAR),
+            ("collapsed", size::COLLAPSED),
+            ("row", size::ROW),
+            ("control", size::CONTROL),
+            ("reading", size::READING),
+            ("radius-s", size::RADIUS_S),
+            ("radius", size::RADIUS),
+            ("radius-l", size::RADIUS_L),
+            ("text-xs", size::TEXT_XS),
+            ("text-sm", size::TEXT_SM),
+            ("text", size::TEXT),
+            ("text-md", size::TEXT_MD),
+            ("text-lg", size::TEXT_LG),
+            ("text-xl", size::TEXT_XL),
+            ("text-display", size::TEXT_DISPLAY),
+        ];
+        for (name, value) in window {
+            let found = devd_app_core::size::find(name).unwrap_or_else(|| panic!("{name} is not in the shared table"));
+            assert_eq!(found.px, *value, "{name}");
+        }
+    }
 
     fn all() -> Vec<Theme> {
         Theme::ORDER.iter().map(|id| Theme::by_id(id)).collect()

@@ -113,28 +113,30 @@
   --s6: 32px;
   --s7: 48px;
 
-  /* Type: a little larger than it was, everywhere. Every size below is one step up, and the
-   * window's own scale in theme.rs moved with it, so the two interfaces read the same size. */
-  --text-2xs: 12px;
-  --text-xs: 13px;
-  --text-sm: 14px;
-  --text-md: 15px;
-  --text-lg: 17px;
-  --text-xl: 20px;
+  /* Type, shape and the reading column come from `/sizes.js`, which is generated from
+   * `devd_app_core::size` - the same table the native window draws from. A change there moves
+   * both interfaces. The sizes this stylesheet keeps to itself are page-only: the two largest
+   * display sizes, the text rhythm, and the line spacing. */
+  --text-2xs: var(--size-text-2xs, 11px);
+  --text-xs: var(--size-text-xs, 12px);
+  --text-sm: var(--size-text-sm, 13px);
+  --text-md: var(--size-text-md, 15px);
+  --text-lg: var(--size-text-lg, 17px);
+  --text-xl: var(--size-text-xl, 20px);
   --text-2xl: 28px;
-  --text-display: 34px;
+  --text-display: var(--size-text-display, 28px);
   --leading: 1.55;
 
   /* Shape. */
-  --radius-sm: 4px;
-  --radius: 6px;
-  --radius-lg: 10px;
+  --radius-sm: var(--size-radius-s, 4px);
+  --radius: var(--size-radius, 6px);
+  --radius-lg: var(--size-radius-l, 10px);
   --radius-xl: 14px;
 
   /* Layout. */
-  --status-h: 28px;
+  --status-h: var(--size-status, 26px);
   --page-max: 1440px;
-  --reading: 840px;
+  --reading: var(--size-reading, 820px);
 
   --mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, "Liberation Mono", Menlo, monospace;
   --sans: "Inter Tight", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;

@@ -34,14 +34,15 @@ impl Shell {
 
     /// Send a message as the person, leaving whatever they were typing, and what they had attached, as it was.
     fn reply(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let draft = self.composer.read(cx).text().to_string();
-        let files = std::mem::take(&mut self.compose.files);
-        self.composer
-            .update(cx, |input, cx| input.set_text(text.to_string(), cx));
+        // The box of the screen in front: a drawn answer is pressed on the Assistant or on Home.
+        let screen = self.front_screen();
+        let input = self.composer_of(screen).clone();
+        let draft = input.read(cx).text().to_string();
+        let files = std::mem::take(&mut self.compose_of(screen).files);
+        input.update(cx, |input, cx| input.set_text(text.to_string(), cx));
         self.send(window, cx);
-        self.composer
-            .update(cx, |input, cx| input.set_text(draft, cx));
-        self.compose.files = files;
+        input.update(cx, |input, cx| input.set_text(draft, cx));
+        self.compose_of(screen).files = files;
     }
 
     /// Go to a page of devd, or open a file or folder that exists.

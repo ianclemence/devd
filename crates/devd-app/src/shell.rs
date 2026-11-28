@@ -333,6 +333,16 @@ struct Palette {
 }
 
 /// The root view.
+/// Which of the two composers is on the screen in front.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ComposerScreen {
+    /// Home's box: a new message.
+    #[default]
+    Home,
+    /// The Assistant's box: a message in the open conversation.
+    Assistant,
+}
+
 pub struct Shell {
     /// Where the window is, and has been.
     pub history: History,
@@ -343,13 +353,20 @@ pub struct Shell {
     focus: FocusHandle,
     commands: Commands,
     palette: Option<Palette>,
-    /// The message box, shared by Home and the Assistant.
+    /// The message box of Home's own composer.
     pub composer: Entity<TextInput>,
+    /// The message box of the Assistant's composer. The two are separate controls: what is attached
+    /// to a message on Home is Home's, and must not appear in the Assistant's box as well.
+    pub chat_composer: Entity<TextInput>,
+    /// Whether the screen in front is the Assistant (its composer) or anything else (Home's).
+    /// Kept as the screen is drawn, because a composer sends from the controls it drew.
+    pub composer_screen: std::cell::Cell<ComposerScreen>,
     /// What is typed but not sent, kept for each conversation, and which one the message box now holds.
     drafts: std::collections::HashMap<String, String>,
     draft_of: String,
-    /// What the message box has chosen besides its text.
+    /// What each message box has chosen besides its text: Home's, and the Assistant's.
     pub compose: screens::compose::Compose,
+    pub chat_compose: screens::compose::Compose,
     /// The conversation on screen, prepared for drawing.
     pub transcript: screens::assistant::Transcript,
     /// What the Intelligence screen has open.
@@ -368,7 +385,8 @@ pub struct Shell {
     pub pane: screens::pane::PaneUi,
     /// Whether the conversation's own menu is open: fork, settle, rename, link, delete.
     pub conversation_menu: bool,
-    _watch: Subscription,
+    /// The events of Home's message box and the Assistant's.
+    _watch: (Subscription, Subscription),
 }
 
 impl Shell {
@@ -388,24 +406,29 @@ impl Shell {
             // Twelve rows before it scrolls: room to read back a long prompt without reaching for the wheel.
             TextInput::new("Ask devd anything. / for skills, @ for a teammate", cx)
                 .multiline(12)
-                .spelling(dictionary)
+                .spelling(dictionary.clone())
                 .linking()
         });
         let watch = cx.subscribe_in(
             &composer,
             window,
-            |this, _, event: &InputEvent, window, cx| match event {
-                // Enter takes the highlighted skill or member when a menu is showing, and sends otherwise.
-                InputEvent::Submitted => {
-                    if !this.compose_pick(cx) {
-                        this.send(window, cx);
-                    }
-                }
-                InputEvent::Changed => this.compose_changed(cx),
-                InputEvent::Up => this.compose_step(-1, cx),
-                InputEvent::Down => this.compose_step(1, cx),
-                InputEvent::Cancelled => this.compose_cancel(cx),
-                InputEvent::Saved => {}
+            |this, _, event: &InputEvent, window, cx| {
+                this.composer_event(ComposerScreen::Home, event, window, cx)
+            },
+        );
+        // The Assistant's box is a second control of its own, with its own events: see
+        // `composer_event`. It exists from the start so a draft can be handed between conversations.
+        let chat_composer = cx.new(|cx| {
+            TextInput::new("Ask devd anything. / for skills, @ for a teammate", cx)
+                .multiline(12)
+                .spelling(dictionary.clone())
+                .linking()
+        });
+        let chat_watch = cx.subscribe_in(
+            &chat_composer,
+            window,
+            |this, _, event: &InputEvent, window, cx| {
+                this.composer_event(ComposerScreen::Assistant, event, window, cx)
             },
         );
         let focus = cx.focus_handle();
@@ -440,11 +463,38 @@ impl Shell {
             commands: commands(),
             palette: None,
             composer,
+            chat_composer,
+            composer_screen: std::cell::Cell::new(ComposerScreen::Home),
             drafts: Default::default(),
             draft_of: String::new(),
             compose: Default::default(),
+            chat_compose: Default::default(),
             transcript: screens::assistant::Transcript::new(),
-            _watch: watch,
+            _watch: (watch, chat_watch),
+        }
+    }
+
+    /// One of the two message boxes got an event. Each does what the box on its own screen does;
+    /// neither reads or writes the other's text or attachments.
+    fn composer_event(
+        &mut self,
+        screen: ComposerScreen,
+        event: &InputEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            // Enter takes the highlighted skill or member when a menu is showing, and sends otherwise.
+            InputEvent::Submitted => {
+                if !self.compose_pick(screen, cx) {
+                    self.send(window, cx);
+                }
+            }
+            InputEvent::Changed => self.compose_changed(screen, cx),
+            InputEvent::Up => self.compose_step(screen, -1, cx),
+            InputEvent::Down => self.compose_step(screen, 1, cx),
+            InputEvent::Cancelled => self.compose_cancel(screen, cx),
+            InputEvent::Saved => {}
         }
     }
 
@@ -539,7 +589,7 @@ impl Shell {
             }
             "conversation.new" => {
                 self.history.go(Route::Assistant(None));
-                window.focus(&self.composer.focus_handle(cx));
+                window.focus(&self.chat_composer.focus_handle(cx));
             }
             "view.palette" => return self.open_palette(window, cx),
             "app.stop_background" => {
@@ -626,9 +676,39 @@ impl Shell {
         cx.notify();
     }
 
+    /// The message box of a screen.
+    pub(crate) fn composer_of(&self, screen: ComposerScreen) -> &Entity<TextInput> {
+        match screen {
+            ComposerScreen::Home => &self.composer,
+            ComposerScreen::Assistant => &self.chat_composer,
+        }
+    }
+
+    /// What a screen's box has chosen besides its text.
+    pub(crate) fn compose_of(&mut self, screen: ComposerScreen) -> &mut screens::compose::Compose {
+        match screen {
+            ComposerScreen::Home => &mut self.compose,
+            ComposerScreen::Assistant => &mut self.chat_compose,
+        }
+    }
+
+    /// The box of the screen in front: the Assistant's when a conversation is, Home's otherwise.
+    pub(crate) fn front_screen(&self) -> ComposerScreen {
+        if matches!(self.history.current(), Route::Assistant(_)) {
+            ComposerScreen::Assistant
+        } else {
+            ComposerScreen::Home
+        }
+    }
+
     /// Send what is in the message box: to the open conversation, or as a new one.
+    ///
+    /// The box of the screen in front is the one read, with what was attached to it and the choices
+    /// made under it: Home's box is not the Assistant's, even though both look alike.
     pub(crate) fn send(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        let text = self.composer.read(cx).text().trim().to_string();
+        let screen = self.front_screen();
+        let input = self.composer_of(screen).clone();
+        let text = input.read(cx).text().trim().to_string();
         if text.is_empty() {
             return;
         }
@@ -636,16 +716,17 @@ impl Shell {
             Route::Assistant(Some(id)) => Some(id.clone()),
             _ => None,
         };
-        let text = screens::compose::with_files(&text, &self.compose.files);
+        let compose = self.compose_of(screen);
+        let text = screens::compose::with_files(&text, &compose.files);
         let mut args = json!({ "message": text });
         // Only what was chosen is sent; the rest stays as the conversation has it.
-        if let Some(mode) = self.compose.mode {
+        if let Some(mode) = compose.mode {
             args["permission"] = json!(mode);
         }
-        if let Some(effort) = self.compose.effort {
+        if let Some(effort) = compose.effort {
             args["effort"] = json!(effort);
         }
-        if let Some((provider, model)) = &self.compose.model {
+        if let Some((provider, model)) = &compose.model {
             args["provider"] = json!(provider);
             args["model"] = json!(model);
         }
@@ -674,8 +755,8 @@ impl Shell {
                     .invalidating("team"),
             );
         }
-        self.compose.files.clear();
-        self.composer.update(cx, |input, cx| input.clear(cx));
+        self.compose_of(screen).files.clear();
+        input.update(cx, |input, cx| input.clear(cx));
         if thread.is_none() {
             self.history.go(Route::Assistant(None));
         }
@@ -1891,7 +1972,7 @@ impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Arriving at another conversation, the words you had for it are back and the box is ready to type in.
         if self.sync_draft(cx) && matches!(self.history.current(), Route::Assistant(_)) && self.modal.is_none() && self.palette.is_none() {
-            window.focus(&gpui::Focusable::focus_handle(self.composer.read(cx), cx));
+            window.focus(&gpui::Focusable::focus_handle(self.chat_composer.read(cx), cx));
         }
         // The first frame is the number a person feels, so it is written down once per launch.
         note_first_frame(&devd(cx).conn.home);
@@ -2128,19 +2209,25 @@ impl Shell {
 }
 
 impl Shell {
-    /// Give each conversation its own unsent words. The message box is one control, so on arriving at another
-    /// conversation what was typed is put by and that conversation's own words are brought back. A new
-    /// conversation and Home share one; a screen with no message box changes nothing.
+    /// Give each conversation its own unsent words.
+    ///
+    /// Only the Assistant's box is per-conversation: on arriving at another conversation, what was
+    /// typed in its box is put by and that conversation's own words are brought back. A new
+    /// conversation starts with an empty box. Home has a box of its own with nothing to swap: what
+    /// is typed there stays there, and is not the Assistant's.
     pub(crate) fn sync_draft(&mut self, cx: &mut Context<Self>) -> bool {
+        if !matches!(self.history.current(), Route::Assistant(_)) {
+            return false;
+        }
         let here = match self.history.current() {
             Route::Assistant(Some(id)) => id.clone(),
-            Route::Assistant(None) | Route::Home => String::new(),
+            Route::Assistant(None) => String::new(),
             _ => return false,
         };
         if here == self.draft_of {
             return false;
         }
-        let typed = self.composer.read(cx).text().to_string();
+        let typed = self.chat_composer.read(cx).text().to_string();
         let left = std::mem::replace(&mut self.draft_of, here);
         if typed.is_empty() {
             self.drafts.remove(&left);
@@ -2148,7 +2235,7 @@ impl Shell {
             self.drafts.insert(left, typed);
         }
         let kept = self.drafts.remove(&self.draft_of).unwrap_or_default();
-        self.composer.update(cx, |input, cx| input.set_text(kept, cx));
+        self.chat_composer.update(cx, |input, cx| input.set_text(kept, cx));
         true
     }
 }

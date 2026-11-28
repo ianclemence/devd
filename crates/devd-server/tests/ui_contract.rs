@@ -468,6 +468,11 @@ fn every_custom_property_the_stylesheet_uses_is_defined() {
             used.push(name);
         }
     }
+    // The number and size table is not written in the stylesheet: it is generated from
+    // `devd_app_core::size` and served as `/sizes.css`, so those names are defined too.
+    for size in devd_app_core::size::SIZES {
+        defined.push(format!("size-{}", size.name));
+    }
     used.sort();
     used.dedup();
     let mut missing: Vec<&String> = Vec::new();
@@ -477,6 +482,27 @@ fn every_custom_property_the_stylesheet_uses_is_defined() {
         }
     }
     assert!(missing.is_empty(), "these custom properties are used but never defined: {missing:?}");
+}
+
+#[test]
+fn the_page_is_handed_the_window_s_own_proportions() {
+    // `/sizes.css` and `/sizes.js` come from the same table the native window draws from. A page
+    // that used its own numbers would look like a different application.
+    let css = devd_app_core::size::css();
+    assert!(css.contains("--size-reading:"), "{css}");
+    let script = devd_app_core::size::script();
+    assert!(script.contains("\"reading\":"), "{script}");
+    // The page loads both before its own script, so its stylesheet and its code agree from the
+    // first paint.
+    let index = HTML;
+    let sizes_css = index.find("/sizes.css").expect("/sizes.css is linked");
+    let sizes_js = index.find("/sizes.js").expect("/sizes.js is loaded");
+    let app = index.find("/app.js").expect("/app.js is loaded");
+    assert!(sizes_css < app && sizes_js < app);
+    // And the rail and the areas come from the window's page table, not from a second list.
+    assert!(index.contains("/rail.js") && index.contains("/areas.js"));
+    let rail = devd_app_core::pages::rail_script();
+    assert!(rail.contains("\"label\":\"Projects\""));
 }
 
 #[test]

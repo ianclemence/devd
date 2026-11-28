@@ -33,7 +33,9 @@ futures = "0.3"
 unicode-segmentation = "1"
 # Decoding the Browser pane's live frames into images the GPU draws, without gpui's asset cache (which keeps every
 # image it has loaded, and would keep every frame). The same version gpui itself uses.
-image = { version = "0.25", default-features = false, features = ["jpeg"] }
+# The page's frames are JPEG; a picture attached to a message is whatever the person attached, so
+# the composer's previews take every format the agent itself sends: PNG, JPEG, GIF and WebP.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 
 [build-dependencies]
 embed-resource = "3"

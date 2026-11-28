@@ -36,6 +36,7 @@ pub mod pages;
 pub mod presence;
 pub mod project;
 pub mod scorecard;
+pub mod size;
 pub mod spell;
 pub mod status;
 pub mod surface;

@@ -198,6 +198,65 @@ pub async fn toolnames(headers: HeaderMap) -> Response {
     asset("text/javascript; charset=utf-8", body.as_bytes(), &PACKED, &headers)
 }
 
+/// The interface's proportions as CSS custom properties (`--size-rail: 56px`). They come from
+/// `devd_app_core::size`, which the native window draws from too, so the page and the window use
+/// the same spacing, type and radius instead of two sets that drift apart.
+pub async fn sizes_style(headers: HeaderMap) -> Response {
+    static BODY: OnceLock<String> = OnceLock::new();
+    static PACKED: OnceLock<Packed> = OnceLock::new();
+    let body = BODY.get_or_init(devd_app_core::size::css);
+    asset("text/css; charset=utf-8", body.as_bytes(), &PACKED, &headers)
+}
+
+/// The same table as a script (`window.DEVD_SIZES`), for page code that must compute a number.
+pub async fn sizes_script(headers: HeaderMap) -> Response {
+    static BODY: OnceLock<String> = OnceLock::new();
+    static PACKED: OnceLock<Packed> = OnceLock::new();
+    let body = BODY.get_or_init(devd_app_core::size::script);
+    asset("text/javascript; charset=utf-8", body.as_bytes(), &PACKED, &headers)
+}
+
+/// The rail of screens (`window.DEVD_RAIL`), from `devd_app_core::pages::RAIL`, the list the native
+/// window draws its own rail from. Both interfaces therefore show the same screens in the same
+/// order, and a screen added to one is in both.
+pub async fn rail(headers: HeaderMap) -> Response {
+    static BODY: OnceLock<String> = OnceLock::new();
+    static PACKED: OnceLock<Packed> = OnceLock::new();
+    let body = BODY.get_or_init(devd_app_core::pages::rail_script);
+    asset("text/javascript; charset=utf-8", body.as_bytes(), &PACKED, &headers)
+}
+
+/// The pages of each area (`window.DEVD_AREAS`), from `devd_app_core::pages`, so the browser's
+/// second row of tabs is the window's row of tabs: same pages, same names, same order.
+pub async fn areas(headers: HeaderMap) -> Response {
+    static BODY: OnceLock<String> = OnceLock::new();
+    static PACKED: OnceLock<Packed> = OnceLock::new();
+    let body = BODY.get_or_init(|| {
+        use devd_app_core::pages::{Area, tabs};
+        let mut out = String::from("window.DEVD_AREAS=[");
+        for (i, area) in [Area::Projects, Area::Sites, Area::Runs, Area::Team, Area::Server, Area::Settings]
+            .into_iter()
+            .enumerate()
+        {
+            if i > 0 {
+                out.push(',');
+            }
+            let tabs: Vec<String> = tabs(area)
+                .into_iter()
+                .map(|t| format!("{{\"label\":{:?},\"path\":{:?}}}", t.label, t.route.path()))
+                .collect();
+            out.push_str(&format!(
+                "{{\"home\":{:?},\"tabs\":[{}]}}",
+                area.home().path(),
+                tabs.join(",")
+            ));
+        }
+        out.push_str("];");
+        out
+    });
+    asset("text/javascript; charset=utf-8", body.as_bytes(), &PACKED, &headers)
+}
+
 /// The stylesheet.
 pub async fn style(headers: HeaderMap) -> Response {
     asset(
