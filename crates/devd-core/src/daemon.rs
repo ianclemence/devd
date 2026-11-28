@@ -152,21 +152,41 @@ pub fn claim(paths: &Paths, port: u16, version: &str, role: &str) -> Result<Clai
                         held.version, held.pid, held.role, held.port
                     )));
                 }
-                // Unreadable or stale. Replace it and try again exactly once.
+                // Unreadable or stale. Replace it and try again exactly once. A record left by a
+                // crashing devd may not be removable: a file's delete right is separate from its
+                // write right, so on a folder that grants writing but not deleting both the remove
+                // and the rename over it are refused ("Access is denied"). The record is then
+                // written where it stands. It holds no port until `set_port`, and the claim below
+                // returns only once the file says this process, so nothing attaches to it early.
                 if attempt == 0 {
-                    match std::fs::remove_file(&path) {
-                        Ok(()) => continue,
+                    let removed = match std::fs::remove_file(&path) {
                         // Gone between the two reads: another process is claiming it now.
-                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-                        // A stale record that cannot be removed is not a race with another devd, and
-                        // "try again" would fail forever. Say which file and why.
-                        Err(e) => {
-                            return Err(DevdError::conflict(format!(
-                                "the instance record {} is left over from a devd that is no longer running, and it could not be removed ({e}); delete it and start devd again",
-                                path.display()
-                            )));
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
+                        r => r.is_ok(),
+                    };
+                    if !removed {
+                        match std::fs::OpenOptions::new().write(true).open(&path) {
+                            Ok(mut file) => {
+                                let text = serde_json::to_string_pretty(&instance)
+                                    .map_err(|e| DevdError::internal(e.to_string()))?;
+                                file.set_len(0)?;
+                                file.write_all(text.as_bytes())?;
+                                return Ok(Claim {
+                                    paths: paths.clone(),
+                                    instance,
+                                });
+                            }
+                            Err(e) => {
+                                // Neither removed nor written: not a race with another devd, and
+                                // "try again" would fail forever. Say which file and why.
+                                return Err(DevdError::conflict(format!(
+                                    "the instance record {} is left over from a devd that is no longer running, and it could not be removed or written ({e}); delete it and start devd again",
+                                    path.display()
+                                )));
+                            }
                         }
                     }
+                    continue;
                 }
                 return Err(DevdError::conflict(
                     "another devd process is claiming the instance record; try again",
@@ -183,7 +203,8 @@ mod tests {
     use super::*;
 
     fn paths() -> (tempfile::TempDir, Paths) {
-        let dir = tempfile::tempdir().unwrap();
+        // 	arget is this build's box; the system's temporary folder may be closed to it.
+        let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).or_else(|_| tempfile::tempdir()).unwrap();
         let paths = Paths::rooted(dir.path());
         (dir, paths)
     }
@@ -208,6 +229,42 @@ mod tests {
         drop(claim(&paths, 1, "1", "daemon").unwrap());
         assert!(current(&paths).is_none());
         assert!(claim(&paths, 2, "1", "daemon").is_ok());
+    }
+
+    #[test]
+    fn a_stale_record_that_may_not_be_deleted_is_written_where_it_stands() {
+        // A file's delete right is separate from its write right. A record left by a crashing devd
+        // must still be replaceable when it can be written but neither removed nor renamed over
+        // (the state that stopped devd starting with "Access is denied"): the record is written
+        // where it stands, and the claim is made.
+        #[cfg(windows)]
+        {
+            let (_dir, paths) = paths();
+            let path = record_path(&paths);
+            std::fs::write(&path, r#"{"pid":999999999,"started":"0","port":1}"#).unwrap();
+            let deny = std::process::Command::new("icacls")
+                .arg(&path)
+                .args(["/deny", "*S-1-1-0:(DC)"])
+                .output()
+                .expect("icacls runs");
+            // Unless the rights are in force (a volume or share that ignores them), the test cannot
+            // show the difference and stands down rather than passing for the wrong reason.
+            let denied = deny.status.success() && std::fs::remove_file(&path).is_err();
+            if !denied {
+                let _ = std::process::Command::new("icacls").arg(&path).args(["/reset"]).output();
+                return;
+            }
+            let claimed = claim(&paths, 7, "9.9.9", "ui").expect("a writable record is replaced in place");
+            assert_eq!(claimed.instance().port, 7);
+            assert!(std::fs::write(&path, "").is_ok(), "the test's own file must still be writable");
+            let seen = current(&paths).expect("the claim is the record");
+            assert_eq!(seen.pid, std::process::id());
+            assert_eq!(seen.port, 7);
+            // The file is the test's, not devd's: its rights go back so the temporary folder can be
+            // cleaned up when the test ends (a deny rule outlives the process that wrote it).
+            drop(claimed);
+            let _ = std::process::Command::new("icacls").arg(&path).arg("/reset").output();
+        }
     }
 
     #[test]

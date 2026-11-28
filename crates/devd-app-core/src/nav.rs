@@ -141,6 +141,9 @@ impl Route {
     /// The route as text: `/sites/blog`.
     pub fn path(&self) -> String {
         match (self, self.selection()) {
+            // Home is the root, in the window and in a browser alike: it is the one address that
+            // is also a page's front door, so it is written the way both read it.
+            (Route::Home, _) => "/".to_string(),
             (Route::Project(dir, tab), _) => format!("/projects/{}/{}", encode(dir), tab.id()),
             (_, Some(id)) => format!("/{}/{}", self.segment(), encode(id)),
             (_, None) => format!("/{}", self.segment()),

@@ -123,17 +123,28 @@ body {
  * conversation, a project's name in small caps above its rows, and "Clear finished" along the
  * bottom. The page's list is drawn in that shape; what it says is its own data.
  */
+/* Two columns, and only two: the list, then the screen. Named areas, so the panel's own absolute
+ * positioning and the scrim (which is not a column at all) cannot take a column of their own and
+ * squeeze the screen into the list's width. */
 .shell.has-panel .legacy.content {
   display: grid;
   grid-template-columns: var(--size-sidebar) minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
+  grid-template-areas: "panel main";
   height: 100%;
 }
 
 .shell.has-panel .legacy.content > #panel {
+  grid-area: panel;
+  position: relative;
+  left: auto;
+  right: auto;
+  top: auto;
+  bottom: auto;
+  z-index: auto;
   display: flex !important;
-  width: var(--size-sidebar);
-  min-width: var(--size-sidebar);
+  width: auto;
+  min-width: 0;
   height: 100%;
   margin: 0;
   padding: 0;
@@ -144,10 +155,20 @@ body {
   flex-direction: column;
 }
 
+/* The panel's backdrop belongs over the page on a narrow screen; on the window's frame the list
+   is always a column, so the backdrop is not drawn and, either way, takes no room in the grid. */
+.shell.has-panel .legacy.content > .panel-scrim {
+  display: none;
+  position: fixed;
+  inset: 0;
+}
+
 .shell.has-panel .main {
+  grid-area: main;
   height: 100%;
   overflow: auto;
   min-width: 0;
+  width: auto;
 }
 
 /* With no list, the screen has the window. */
