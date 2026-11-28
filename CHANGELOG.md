@@ -10,6 +10,17 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.45.3] - 2026-11-29 - The strip keeps a whole answer
+
+### Fixed
+
+- **The status strip no longer freezes on "Checking the machine…".** The frame read
+  `/api/chrome` as the page loaded; an answer from a server still starting drew that line and a
+  strip with no version, and it stood for as long as the screen was open. A frame without its
+  version is no longer kept, and the frame is read on load and on a slow beat rather than on
+  every screen change.
+
+---
 ## [0.45.2] - 2026-11-28 - One set of addresses
 
 ### Fixed
