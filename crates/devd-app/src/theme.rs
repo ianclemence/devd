@@ -636,6 +636,17 @@ pub mod size {
 /// each system and needs no bundled file.
 pub const SANS: &str = ".SystemUIFont";
 
+/// The face that draws a key's symbol (⌘, ⌥): the system's symbol font, where the UI face has no
+/// glyph for it and drew a box instead.
+pub fn symbols() -> &'static str {
+    // On macOS the system UI face carries the modifier symbols in its own right.
+    if cfg!(target_os = "windows") {
+        "Segoe UI Symbol"
+    } else {
+        SANS
+    }
+}
+
 /// The typeface for code, paths, ids and numbers that should line up.
 pub fn mono() -> &'static str {
     if cfg!(target_os = "windows") {
