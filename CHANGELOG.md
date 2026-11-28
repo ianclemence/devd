@@ -36,6 +36,14 @@ may change capability identifiers where the design was wrong.
   `/sizes.css` and `/sizes.js`. The rail and each area's tabs come from
   `devd_app_core::pages::RAIL`, served as `/rail.js` and `/areas.js`.
 - `area_of` now reports the Runs screen as an area, as its pages (`Recreate`) assumed.
+- **The web client is the window's frame.** The page's own rail, top bar and status strip are
+  gone. The rail (the window's icons, hover names, Ctrl+1..N, badges), the top bar (rail
+  toggle, back, forward, the crumb, the faces at work, the 280px search) and the strip are
+  drawn from the window's own code and data: `devd_app_core::pages` for the rail and each
+  area's tabs, `devd_app_core::frame` for the crumb and the lit screen,
+  `devd_app_core::chrome` for the badges and the strip, and `devd_app_core::glyphs` for the
+  icons. The palettes are the window's five, written from the window's theme code
+  (`ui-themes.json`), and every colour token the screens use now resolves to them.
 
 ---
 
