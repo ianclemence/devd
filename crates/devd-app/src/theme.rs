@@ -557,8 +557,6 @@ pub mod size {
     /// A card, a menu, a dialog.
     pub const RADIUS_L: f32 = 10.0;
 
-    /// A count in a corner, the smallest type the interface uses.
-    pub const TEXT_2XS: f32 = 12.0;
     /// Metadata, the status strip.
     pub const TEXT_XS: f32 = 12.0;
     /// Labels and second lines.
@@ -613,7 +611,6 @@ mod tests {
             ("radius-s", size::RADIUS_S),
             ("radius", size::RADIUS),
             ("radius-l", size::RADIUS_L),
-            ("text-2xs", size::TEXT_2XS),
             ("text-xs", size::TEXT_XS),
             ("text-sm", size::TEXT_SM),
             ("text", size::TEXT),
