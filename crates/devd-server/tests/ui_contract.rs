@@ -294,7 +294,7 @@ fn services_come_from_one_registry_catalogue() {
     // The Services screen used a third static list with download flags. The
     // catalogue capability is now the only source of install/adopt/find.
     assert!(!APP.contains("var KNOWN_SERVICES"), "no static service catalogue");
-    assert!(APP.contains("attempt(\"service.catalogue\")"), "the screen reads the catalogue capability");
+    assert!(APP.contains("[\"service.catalogue\", \"catalogue\", true]"), "the screen reads the catalogue capability");
     assert!(APP.contains("data-action=\"service-find\""), "an existing folder can be found");
     assert!(APP.contains("data-action=\"service-adopt\""), "a found folder can be adopted");
 }
@@ -398,7 +398,9 @@ fn tools_and_runtimes_do_not_offer_the_same_install() {
 fn site_detail_has_an_address_and_its_own_preview() {
     assert!(APP.contains("return SITE.name ? \"/sites/\" + encodeURIComponent(SITE.name) : \"/sites\";"));
     assert!(APP.contains("if (p.indexOf(\"/sites/\") === 0) return \"site\";"));
-    assert!(APP.contains("if (p.indexOf(\"/server/sites/\") === 0) return \"site\";"), "old site links still resolve");
+    // `/server/sites/<name>` is an old link; it is rewritten to `/sites/<name>` (rule below).
+    assert!(APP.contains("\"/server/sites\":"), "old site links still resolve");
+    assert!(!APP.contains("if (p.indexOf(\"/server/sites/\") === 0) return \"site\";"), "an old site link is rewritten, not read as a page");
     assert!(APP.contains("data-action=\"site-tab\" data-tab=\"preview\""));
     assert!(APP.contains("function sitePreview(row)"));
     assert!(APP.contains("function siteDatabase(row)"));
@@ -598,6 +600,44 @@ fn every_navigation_button_points_at_a_page() {
         }
     }
     assert!(missing.is_empty(), "a button navigates to a view render() cannot draw: {missing:?}");
+}
+
+#[test]
+fn the_page_addresses_are_the_window_addresses() {
+    // A link to a screen in the page is a link the window opens: the paths it writes come from
+    // the window's own route table (`Route::path`), not a set of its own. A page of an area keeps
+    // the id the window gives it (`/tools`, `/schedules`), which `Route::parse` reads as a page.
+    let table = &APP[APP.find("  var ROUTES = {").expect("the page has a route table")..];
+    let table = &table[..table.find("};").unwrap()];
+    let mut paths = Vec::new();
+    for line in table.lines() {
+        let line = line.trim();
+        if !line.contains(": \"") || line.starts_with("//") {
+            continue;
+        }
+        let path: String = line.split(": \"").nth(1).unwrap().chars().take_while(|c| *c != '"').collect();
+        let view: String = line.chars().take_while(|c| c.is_ascii_lowercase()).collect();
+        paths.push((view, path));
+    }
+    assert!(paths.len() >= 20, "the route table is readable: {paths:?}");
+    for (view, path) in &paths {
+        if view == "terminal" {
+            // A shell is a tab of a project in the window; the whole-screen one is the page's own.
+            continue;
+        }
+        let route = devd_app_core::nav::Route::parse(path)
+            .unwrap_or_else(|| panic!("the window does not open `{path}`"));
+        assert!(
+            route.path() == *path,
+            "`{path}` is not the window's own spelling: the window writes `{}` for it",
+            route.path()
+        );
+    }
+    // The addresses the page used to write still open what they used to.
+    let legacy = &APP[APP.find("  var LEGACY_ROUTES = {").expect("old addresses are kept")..];
+    for (old, view) in [("/agents/runs", "team"), ("/agents/team", "agents"), ("/models", "providers"), ("/api-tools", "capabilities")] {
+        assert!(legacy.contains(&format!("\"{old}\"")), "`{old}` no longer opens {view}");
+    }
 }
 
 #[test]

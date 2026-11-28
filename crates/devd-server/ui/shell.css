@@ -237,6 +237,7 @@
 .shell-search .icon { width: 13px; height: 13px; flex: none; }
 .shell-search .label { flex: 1 1 auto; text-align: left; }
 .shell-search kbd {
+  gap: 2px;
   height: 18px;
   padding: 0 5px;
   display: inline-flex;
@@ -245,6 +246,13 @@
   border: 1px solid var(--win-line-strong);
   font-family: var(--mono);
   font-size: 10px;
+}
+
+/* A chord is one chip per key, joined by a plus, as the window draws it: Ctrl + K, not ctrl+k. */
+.shell-search kbd span { padding: 0 1px; }
+.shell-search kbd span + span { color: var(--win-faint); }
+@media (max-width: 900px) {
+  .shell-search kbd { display: none; }
 }
 
 /* The area's tabs: the window's second row under the top bar. */

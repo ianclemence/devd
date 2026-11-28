@@ -2093,32 +2093,45 @@
     function attempt(id) {
       return read(id).catch(function (e) { failures[id] = e && e.message ? e.message : "could not be read"; return FAILED; });
     }
-    var request = Promise.all([
-      attempt("service.list"), attempt("site.list"), attempt("runtime.list"), attempt("tls.list"),
-      attempt("tls.ca.show"), attempt("hosts.show"), attempt("tls.ca.status"), attempt("service.catalogue")
-    ]).then(function (r) {
-      function take(i, key, list) {
-        if (r[i] === FAILED) { if (state.server[key] === undefined) state.server[key] = list ? [] : null; return; }
-        state.server[key] = list ? (Array.isArray(r[i]) ? r[i] : []) : r[i];
-      }
-      take(0, "services", true);
-      take(1, "sites", true);
-      take(2, "runtimes", true);
-      take(3, "certs", true);
-      take(4, "ca", false);
-      take(5, "hosts", false);
-      take(6, "trust", false);
-      take(7, "catalogue", true);
+    // The lists a screen is built from come first: services, sites and runtimes are what a
+    // person waits for. Everything else is asked for at the same moment and writes its own part
+    // of the screen as it arrives, so a screen is drawn after the first three, not after eight.
+    function after() {
       state.server.failures = failures;
+      if (state.view === "home" ? !liveIsDirty() : (SERVER_VIEWS.indexOf(state.view) !== -1 && !liveIsDirty())) repaintKeepingFocus();
+    }
+    var request = Promise.all([
+      attempt("service.list"), attempt("site.list"), attempt("runtime.list")
+    ]).then(function (fast) {
+      function put(i, key, list) {
+        if (fast[i] === FAILED) { if (state.server[key] === undefined) state.server[key] = list ? [] : null; return; }
+        state.server[key] = list ? (Array.isArray(fast[i]) ? fast[i] : []) : fast[i];
+      }
+      put(0, "services", true);
+      put(1, "sites", true);
+      put(2, "runtimes", true);
       state.server.loaded = true;
+      state.server.asking = false;
+      after();
+      // The certificate facts, the hosts file and the catalogue: each its own request, each
+      // written and drawn as it comes, none of them holding the screen back.
+      [["tls.list", "certs", true], ["tls.ca.show", "ca", false], ["hosts.show", "hosts", false],
+        ["tls.ca.status", "trust", false], ["service.catalogue", "catalogue", true]]
+        .forEach(function (one) {
+          attempt(one[0]).then(function (value) {
+            if (value === FAILED) { if (state.server[one[1]] === undefined) state.server[one[1]] = one[2] ? [] : null; }
+            else state.server[one[1]] = one[2] ? (Array.isArray(value) ? value : []) : value;
+            after();
+          });
+        });
       read("services.inventory")
         .then(function (inv) {
           state.server.inventory = inv && inv.services ? inv.services : [];
-          if ((SERVER_VIEWS.indexOf(state.view) !== -1 || state.view === "home") && !liveIsDirty()) repaintKeepingFocus();
+          after();
         })
         .catch(function () { /* the panel simply stays out of the page */ });
-    });
-    state.server.pending = request.then(
+      return null;
+    });    state.server.pending = request.then(
       function (value) { state.server.pending = null; return value; },
       function (error) { state.server.pending = null; throw error; }
     );
@@ -12204,60 +12217,109 @@ var TERM_POLL_MS = 250;
    * A link to a screen can be copied and sent to somebody, and the back
    * button means something. The path is the truth about where the person is;
    * the view is what the path resolves to. */
+  /* The window's addresses, one for one (`devd_app_core::nav::Route::path` and
+   * `devd_app_core::pages`): a link to a screen here is a link the window opens, and the address
+   * bar says where the window would say it is. The window's screens a page does not draw
+   * separately (`/runs`) have no entry of their own; the page's screens that are one of the
+   * window's pages use the page's id as the path (`/tools`, `/schedules`). */
   var ROUTES = {
     home: "/",
     inbox: "/inbox",
     assistant: "/assistant",
-    // Runs and the roster live under /agents, named for what they show. The first
-    // version had them the other way round (the roster at /agents, runs at /team).
-    team: "/agents/runs",
+    team: "/runs",
     projects: "/projects",
-    create: "/create",
-    develop: "/develop",
-    agents: "/agents/team",
-    skills: "/agents/skills",
-    schedules: "/agents/schedules",
-    automations: "/agents/automations",
-    shared: "/agents/notes",
-    mcp: "/agents/mcp",
-    // The terminal belongs to a project and lives as a tab there. The address is
-    // kept so an old link still opens a shell, but the rail no longer offers it.
+    create: "/new-project",
+    develop: "/stacks",
+    agents: "/team",
+    skills: "/skills",
+    schedules: "/schedules",
+    automations: "/automations",
+    shared: "/notes",
+    mcp: "/mcp",
+    // A shell belongs to a project in the window (`/projects/<dir>/terminal`); the page keeps a
+    // whole-screen one for a link that names no project.
     terminal: "/terminal",
     mail: "/mail",
     overview: "/server",
-    services: "/server/services",
+    services: "/services",
     sites: "/sites",
-    operations: "/server/operations",
-    toolchain: "/server/tools",
-    runtimes: "/server/runtimes",
-    databases: "/server/databases",
-    remote: "/server/remote",
-    preview: "/server/preview",
-    certificates: "/sites/certificates",
-    hosts: "/sites/hosts",
-    providers: "/models",
+    operations: "/operations",
+    toolchain: "/tools",
+    runtimes: "/runtimes",
+    databases: "/databases",
+    remote: "/remote",
+    preview: "/preview",
+    certificates: "/certificates",
+    hosts: "/hosts",
+    providers: "/intelligence",
     activity: "/activity",
     system: "/diagnostics",
-    capabilities: "/api-tools"
+    capabilities: "/capabilities"
   };
 
+  /* The page's addresses from before this, and the window's own synonyms, still open what they
+   * used to: a saved link or an open tab is not broken by moving a page. */
   var LEGACY_ROUTES = {
-    "/team": "team",
+    "/agents/runs": "team",
+    "/agents/team": "agents",
+    "/agents/skills": "skills",
+    "/agents/schedules": "schedules",
+    "/agents/automations": "automations",
+    "/agents/notes": "shared",
+    "/agents/mcp": "mcp",
     "/agents": "agents",
-    "/skills": "skills",
-    "/schedules": "schedules",
-    "/automations": "automations",
+    "/create": "create",
+    "/develop": "develop",
+    "/models": "providers",
+    "/api-tools": "capabilities",
     "/shared": "shared",
+    "/server/tools": "toolchain",
+    "/server/runtimes": "runtimes",
+    "/server/databases": "databases",
+    "/server/remote": "remote",
+    "/server/preview": "preview",
+    "/server/services": "services",
+    "/server/operations": "operations",
     "/server/sites": "sites",
     "/server/hosts": "hosts",
-    "/server/certificates": "certificates"
+    "/server/certificates": "certificates",
+    "/sites/hosts": "hosts",
+    "/sites/certificates": "certificates",
+    "/sites/mail": "mail",
+    // The window's synonyms for a screen (`Route::parse`): a link an agent wrote still opens.
+    "/chat": "assistant",
+    "/browser": "assistant",
+    "/machine": "overview",
+    "/environment": "overview"
   };
+
+  /* The window's pages, by the id it gives them, so a link like `/tools` resolves to the page. */
+  (function () {
+    for (var key in ROUTES) {
+      if (ROUTES.hasOwnProperty(key)) LEGACY_ROUTES[ROUTES[key]] = key;
+    }
+    // `/` is Home, not a page of its own.
+    delete LEGACY_ROUTES["/"];
+  })();
+
+  /* The project's tab as the window spells it in a path (`ProjectTab::id`). The page's
+   * `terminal` and the window's are the same word; the page's own names are the rest. */
+  function projectTabId(tab) {
+    return ({
+      overview: "overview", files: "files", changes: "changes", history: "history",
+      branches: "branches", stashes: "stashes", tags: "tags", remotes: "remotes",
+      worktrees: "worktrees", recover: "recover", run: "run", terminal: "terminal",
+      agents: "team", todos: "team", reviews: "team", memory: "team"
+    })[tab] || "";
+  }
 
   /* The address of the screen that is showing. */
   function routeFor(view) {
     if (view === "project") {
       var path = state.project && state.project.path;
-      return path ? "/projects/" + encodeURIComponent(path) : "/projects";
+      var tab = state.tab && state.tab !== "overview" ? projectTabId(state.tab) : "";
+      if (!path) return tab ? "/projects/" + tab : "/projects";
+      return "/projects/" + encodeURIComponent(path) + (tab ? "/" + tab : "");
     }
     if (view === "assistant") {
       return AI.thread && AI.thread.id ? "/assistant/" + encodeURIComponent(AI.thread.id) : "/assistant";
@@ -12273,7 +12335,13 @@ var TERM_POLL_MS = 250;
   function viewFor(path) {
     var p = String(path || "/").split("?")[0].replace(/\/+$/, "") || "/";
     if (p === "/" ) return "home";
-    if (p.indexOf("/projects/") === 0) return "project";
+    // `/projects/<tab>` is the project page's tab without a folder chosen yet (the window's own
+    // address); anything else under `/projects/` names a folder and is a project.
+    if (p.indexOf("/projects/") === 0) {
+      var under = p.slice("/projects/".length);
+      if (/^(overview|files|changes|history|branches|stashes|tags|remotes|worktrees|recover|run|terminal|team)$/.test(under)) return "projects";
+      return "project";
+    }
     if (p.indexOf("/assistant/") === 0) return "assistant";
     // Mail is a Sites tab; both addresses open it.
     if (p === "/sites/mail") return "mail";
@@ -12282,11 +12350,13 @@ var TERM_POLL_MS = 250;
     for (var k in ROUTES) {
       if (ROUTES[k] === p) return k;
     }
-    if (p.indexOf("/sites/") === 0) return "site";
-    if (p.indexOf("/server/sites/") === 0) return "site";
+    // `/sites/<name>` is a site's page, except a name the window gives to a page of its own
+    // (`certificates`, `hosts`, `mail`), which are pages and are found by the loop above.
+    if (p.indexOf("/sites/") === 0 && !LEGACY_ROUTES["/sites/" + p.slice("/sites/".length)]) return "site";
     // Addresses from before the rename still open what they used to: a saved link
     // or an open tab is not broken by moving a page.
     if (LEGACY_ROUTES[p]) return LEGACY_ROUTES[p];
+    if (p.indexOf("/sites/") === 0) return "site";
     // An address that means nothing says so, rather than quietly showing Home
     // under a URL that does not belong to it.
     return "notfound";
@@ -12315,7 +12385,20 @@ var TERM_POLL_MS = 250;
       if (!site) view = "sites";
     }
     if (view === "project") {
-      var raw = parts.slice(1).join("/");
+      // `/projects/<dir>` is the overview; `/projects/<dir>/<tab>` is one of its tabs, in the
+      // window's words (`changes`, `history`, `terminal`, `team`, ...). A folder may contain
+      // slashes, so the tab is the last segment and the folder is everything before it.
+      var PROJECT_TABS = ["overview", "files", "changes", "history", "branches", "stashes", "tags",
+        "remotes", "worktrees", "recover", "run", "terminal", "team"];
+      var projectParts = parts.slice(1);
+      var last = projectParts[projectParts.length - 1];
+      var projectTab = projectParts.length > 1 && PROJECT_TABS.indexOf(last) !== -1 ? projectParts.pop() : "overview";
+      // The window's `team` tab holds the to-dos, the reviews and what the team remembers; the
+      // page keeps its own subtab, remembered from before or starting at the to-dos.
+      state.tab = projectTab === "team"
+        ? (["todos", "reviews", "memory"].indexOf(state.tab) !== -1 ? state.tab : "todos")
+        : projectTab;
+      var raw = projectParts.join("/");
       if (raw) {
         try { state.project = { path: decodeURIComponent(raw), name: dirName(decodeURIComponent(raw)) }; } catch (e) { /* not a path */ }
       }
@@ -12334,9 +12417,6 @@ var TERM_POLL_MS = 250;
       }
     }
     // An old address is rewritten to its current one without adding a history entry.
-    if (view === "site" && site && location.pathname.indexOf("/server/sites/") === 0) {
-      history.replaceState({ view: "site" }, "", routeFor("site") + location.search);
-    }
     if (view !== "notfound" && view !== "project" && view !== "site" && view !== "assistant" && location.pathname.replace(/\/+$/, "") !== routeFor(view) && LEGACY_ROUTES[location.pathname.replace(/\/+$/, "")]) {
       history.replaceState({ view: view }, "", routeFor(view) + location.search);
     }
@@ -12560,15 +12640,10 @@ var TERM_POLL_MS = 250;
     // The screen's address, as the window names it: `/runs`, `/team`, `/projects/...`, `/assistant/...`.
     // The page keeps some addresses of its own (`/agents/runs`, `/agents/team`, `/models`); they are
     // translated here, so the crumb and the rail read the window's words rather than the page's.
-    var WINDOW_PATH = {
-      home: "/", inbox: "/inbox", assistant: "/assistant", team: "/runs", agents: "/team",
-      projects: "/projects", sites: "/sites", overview: "/server", services: "/server", operations: "/server",
-      toolchain: "/server", runtimes: "/server", databases: "/server", remote: "/server", preview: "/server",
-      hosts: "/sites", certificates: "/sites", mail: "/sites", providers: "/intelligence",
-      activity: "/activity", capabilities: "/api-tools", system: "/settings",
-      skills: "/skills", schedules: "/schedules", automations: "/automations", shared: "/notes", mcp: "/mcp"
-    };
-    var path = WINDOW_PATH[state.view] || (location.pathname.replace(/\/+$/, "") || "/");
+    // The page's addresses are the window's now (`ROUTES`), so the screen's own address is the
+    // path to ask about; the few the page keeps for itself are translated here.
+    var WINDOW_PATH = { providers: "/intelligence", system: "/settings", capabilities: "/capabilities" };
+    var path = WINDOW_PATH[state.view] || ROUTES[state.view] || (location.pathname.replace(/\/+$/, "") || "/");
     if (state.view === "project" && state.project) path = "/projects/" + encodeURIComponent(state.project.path);
     if (state.view === "site" && SITE.name) path = "/sites/" + encodeURIComponent(SITE.name);
     if (state.view === "assistant" && AI.thread && AI.thread.id) path = "/assistant/" + encodeURIComponent(AI.thread.id);
@@ -12579,12 +12654,18 @@ var TERM_POLL_MS = 250;
       // page of an area, then the screen's name and what is selected.
       var f = frames[path];
       fields = { path: path, rail: f.rail, crumb: f.title, parent: f.parent || null, selection: f.selection || "", area: f.area || "" };
+      // The area whose tabs are drawn under the top bar: the screen is one of its pages when the
+      // path is a page's id (`/tools`), and a project is a page of Projects.
+      if (!fields.area && LEGACY_ROUTES[path] && AREA[LEGACY_ROUTES[path]]) fields.area = AREA[LEGACY_ROUTES[path]];
+      if (state.view === "project") fields.area = "projects";
+      if (state.view === "site") fields.area = "sites";
       fields.current = f.rail;
       var big = (window.DEVD_RAIL || []).filter(function (r) { return r.segment === f.rail; })[0];
       fields.area = big && big.area ? big.area : "";
     } else {
-      // Until the answer arrives: the rail entry's own name.
-      var area = areaOf(state.view);
+      // Until the answer arrives: the rail entry's own name. A page this table names keeps its
+      // entry (`capabilities` is Settings), so the rail and the crumb never flash "Home".
+      var area = (ROUTES[state.view] && LEGACY_ROUTES[ROUTES[state.view]]) || areaOf(state.view);
       var item = (window.DEVD_RAIL || []).filter(function (r) { return r.segment === area; })[0];
       fields = { path: path, current: area, area: item && item.area ? item.area : "", crumb: item ? item.label : "Home", parent: null, selection: "" };
       if (state.view === "project" && state.project) fields.selection = state.project.name || "";
@@ -12634,8 +12715,23 @@ var TERM_POLL_MS = 250;
     tellFrame();
     healthChip();
     if (SERVER_VIEWS.indexOf(state.view) !== -1) {
-      if (!state.server.loaded && state.view !== "toolchain") return renderLoadingServer();
-      if (state.view === "overview") renderOverview();
+      // The screens ask for their own facts (`loadServer`, the toolchain, the project list) while
+      // they draw, so a screen is painted at once - its shape and a word about what is being read -
+      // and fills in as the answers come, rather than holding the previous screen on show.
+      if (!state.server.loaded && state.view !== "toolchain") {
+        // A read that never answers must not leave "Checking…" on screen for ever: after a few
+        // seconds the screen is drawn from what is known, and the answers fill it in when they
+        // come. The deadline is per screen, not per load.
+        if (!state.server.asking) {
+          state.server.asking = true;
+          state.server.askedAt = Date.now();
+          setTimeout(function () { if (!state.server.loaded) render(); }, 6000);
+        }
+        if (!state.server.pending) loadServer().then(function () { if (state.view !== "toolchain" && SERVER_VIEWS.indexOf(state.view) !== -1) render(); }).catch(function () { render(); });
+        // Only while the wait is still fair; after the deadline the screen is drawn without these.
+        if (Date.now() - state.server.askedAt < 6000) renderLoadingServer();
+      }
+      else if (state.view === "overview") renderOverview();
       else if (state.view === "sites") renderSites();
       else if (state.view === "site") renderSite();
       else if (state.view === "operations") renderOperations();
@@ -16517,6 +16613,9 @@ var TERM_POLL_MS = 250;
       state.tab = node.dataset.tab;
       TAB_LAST[tabGroupOf(state.tab).id] = state.tab;
       state.diff = null;
+      // A tab is a place: its address is the project's plus the window's word for it, so it can
+      // be linked, and Back returns to the tab you were on.
+      writeRoute("project", false);
       // `loadTab` marks the tab as loading before it returns, so it runs first:
       // drawing a tab that has not started loading painted its empty state
       // ("No history loaded") for as long as the request took.
@@ -17642,6 +17741,16 @@ var TERM_POLL_MS = 250;
   }
 
   window.addEventListener("popstate", function () { readRoute(); });
+
+  /* The window's frame (`shell.js`) asks the page to go somewhere rather than loading the page
+   * again: a rail entry or an area's tab is a different screen of the same document. The address
+   * goes in the bar as if it had been typed, and the screen behind it is redrawn. */
+  window.DEVD_PAGE = window.DEVD_PAGE || {};
+  window.DEVD_PAGE.go = function (path) {
+    if (!path || path === location.pathname) return;
+    history.pushState({ view: viewFor(path) }, "", path);
+    readRoute();
+  };
 
   // Dropping a file on the composer is the same act as choosing it in the
   // picker. The upload path is what the message carries, so one path handles

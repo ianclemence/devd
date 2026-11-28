@@ -136,6 +136,24 @@ pub const PAGES: &[Page] = &[
         summary: "What the team has learned and proposes to remember",
     },
     Page {
+        id: "services",
+        title: "Services",
+        area: Area::Server,
+        summary: "Nginx, MariaDB, Redis and the rest: what is needed, what is running, and what to start",
+    },
+    Page {
+        id: "operations",
+        title: "Operations",
+        area: Area::Server,
+        summary: "Restarts, upgrades and the checks that keep every service where it should be",
+    },
+    Page {
+        id: "preview",
+        title: "Preview",
+        area: Area::Server,
+        summary: "Open a site or a service in devd's own browser",
+    },
+    Page {
         id: "runtimes",
         title: "Runtimes",
         area: Area::Server,
@@ -369,7 +387,9 @@ mod tests {
         assert_eq!(labels.len(), n, "a screen is listed twice");
         for item in RAIL {
             let route = Route::parse(item.segment).expect("a rail item names a screen");
-            assert_eq!(route.path(), format!("/{}", item.segment), "{}", item.label);
+            // Home is the root (`/`); every other screen is its segment.
+        let path = if item.segment == "home" { "/".to_string() } else { format!("/{}", item.segment) };
+        assert_eq!(route.path(), path, "{}", item.label);
             assert_eq!(route.title(), item.label, "{}", item.segment);
             assert_eq!(area_of(&route).is_some(), item.area.is_some(), "{}", item.label);
             assert!(!item.icon.is_empty(), "{} has no icon", item.label);

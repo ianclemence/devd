@@ -130,7 +130,7 @@
       '<div class="shell-grow"></div>' +
       '<div class="shell-faces">' + faces() + "</div>" +
       '<button type="button" class="shell-search" data-shell="search" aria-label="Search or run a command">' +
-        icon("search", 13) + '<span class="label">Search or run a command</span><kbd>Ctrl K</kbd></button>'
+        icon("search", 13) + '<span class="label">Search or run a command</span><kbd><span>Ctrl</span><span>+</span><span>K</span></kbd></button>'
     );
   }
 
@@ -244,6 +244,35 @@
       location.assign(n.dataset.path);
     }
   });
+
+  /* A rail entry and an area's tab, pressed: the page goes there without loading itself again.
+   *
+   * The page is one document that redraws its screens (`app.js`), so a press here is the same as
+   * one inside the screen: it is handed to the page, which changes the screen and the address.
+   * Without this the frame's own buttons fell through to nothing, and a press on the rail did not
+   * move at all. */
+  function go(path) {
+    var page = window.DEVD_PAGE;
+    if (page && typeof page.go === "function") {
+      page.go(path);
+      return true;
+    }
+    return false;
+  }
+
+  document.addEventListener("click", function (ev) {
+    var node = ev.target && ev.target.closest ? ev.target.closest(".shell-rail-item, .shell-tab") : null;
+    if (!node) return;
+    // A rail entry that opens an area goes to that area's first tab, as a tab press does.
+    var path = node.dataset.path;
+    if (!path && node.dataset.segment) {
+      var item = (window.DEVD_RAIL || []).filter(function (r) { return r.segment === node.dataset.segment; })[0];
+      path = (item && item.area) || "/" + (node.dataset.segment === "home" ? "" : node.dataset.segment);
+    }
+    if (!path) return;
+    ev.preventDefault();
+    if (!go(path)) location.assign(path);
+  }, true);
 
   /* The window's keys: Ctrl+1..7 go to the rail, Ctrl+K opens the search. */
   document.addEventListener("keydown", function (ev) {
