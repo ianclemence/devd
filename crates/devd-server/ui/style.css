@@ -4956,7 +4956,9 @@ ol.stages { list-style: none; padding: 0; }
 .home-head { display: flex; align-items: flex-end; gap: var(--s4); }
 .home-head-text { flex: 1; min-width: 0; }
 .home-status {
-  font-size: 34px;
+  /* The greeting and the machine's status share this style, so it keeps a step of its own rather
+   * than one of the window's: grown by the same one step as the rest of the type. */
+  font-size: 37px;
   font-weight: 600;
   letter-spacing: -0.03em;
   line-height: 1.1;
@@ -7031,7 +7033,10 @@ body { letter-spacing: 0; }
  *   11  meta and counts      12  secondary lines     13  dense rows and controls
  *   14  reading text         16  section heads       22  page titles       28  Home
  * Hierarchy comes from size and weight; colour stays for state. */
-:root { --text-2xs: 11px; --text-xs: 12px; --text-sm: 13px; --text-md: 14px; --text-lg: 16px; --text-xl: 18px; --text-2xl: 22px; --text-display: 28px; }
+/* The type scale is the window's (from `/sizes.css`, generated from `devd_app_core::size`). This
+ * block once restated it with smaller numbers further down the sheet, which quietly undid the
+ * size of every screen; it now only names the two steps the window does not have. */
+:root { --text-2xl: 28px; }
 .page-title, .workspace-head .page-title, .home-head .page-title { font-size: var(--text-2xl); font-weight: 650; line-height: 1.2; }
 .home-status { font-size: var(--text-display); font-weight: 650; line-height: 1.15; }
 .section-title, .run-section, .ui-head-title { font-size: var(--text-md); font-weight: 600; }

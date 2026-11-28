@@ -36,7 +36,7 @@ pub const SIZES: &[Size] = &[
     Size { name: "radius-s", px: 4.0, what: "a badge, a checkbox" },
     Size { name: "radius", px: 6.0, what: "a button, an input, a row" },
     Size { name: "radius-l", px: 10.0, what: "a card, a menu, a dialog" },
-    Size { name: "text-2xs", px: 11.0, what: "a count in a corner" },
+    Size { name: "text-2xs", px: 12.0, what: "a count in a corner" },
     Size { name: "text-xs", px: 12.0, what: "metadata, the status strip" },
     Size { name: "text-sm", px: 13.0, what: "labels and second lines" },
     Size { name: "text", px: 14.0, what: "the interface's body size" },
