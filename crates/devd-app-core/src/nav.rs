@@ -181,7 +181,7 @@ impl Route {
 }
 
 /// Percent-encode what cannot sit in one path segment (a project is a directory).
-fn encode(id: &str) -> String {
+pub fn encode(id: &str) -> String {
     let mut out = String::with_capacity(id.len());
     for byte in id.bytes() {
         match byte {

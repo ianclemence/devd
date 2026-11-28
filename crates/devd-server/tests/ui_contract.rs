@@ -2,8 +2,6 @@
 //! catch the regressions that actually happen: a sidebar entry that opens
 //! nothing, an action with no handler, a logo asset with transparent padding.
 
-use base64::Engine;
-
 const APP: &str = include_str!("../ui/app.js");
 const HTML: &str = include_str!("../ui/index.html");
 const CSS: &str = include_str!("../ui/style.css");
@@ -107,14 +105,18 @@ fn every_action_in_the_markup_has_a_handler() {
 fn the_sidebar_is_short_and_search_is_not_about_capabilities() {
     assert!(!HTML.contains("Search capabilities"));
     assert!(APP.contains("id=\"health-chip\"") && !HTML.contains("health-pill") && !HTML.contains("health-chip"), "the health chip lives in the footer");
-    // One rail of destinations; an area's own pages are the context panel's list, not
-    // more rail entries or a second bar of tabs.
-    assert!(HTML.contains("id=\"rail\"") && HTML.contains("id=\"panel\""));
-    let rail = &APP[APP.find("function rail(force)").unwrap()..];
-    let rail = &rail[..rail.find("function item(i, small)").unwrap()];
-    let items = rail.matches("{ view: \"").count();
-    assert!(items <= 14, "{items} rail entries; related pages belong in the panel");
+    // One rail of destinations, and it is the window's: `shell.js` draws it from
+    // `devd_app_core::pages::RAIL`, each area's pages are the tabs under the top bar, and the
+    // page's own screen keeps the side panel (`id="panel"`).
+    assert!(HTML.contains("id=\"shell-rail\"") && HTML.contains("id=\"panel\""));
+    let shell = include_str!("../ui/shell.js");
+    assert!(shell.contains("window.DEVD_RAIL"), "the rail is the window's list");
+    assert!(shell.contains("window.DEVD_AREAS"), "an area's tabs are the window's pages");
+    let rail = &shell[shell.find("function rail()").unwrap()..];
+    let rail = &rail[..rail.find("function faces()").unwrap()];
+    assert!(rail.contains("DEVD_RAIL"), "the rail draws the window's entries");
     assert!(CSS.contains(".panel-item"));
+    assert!(include_str!("../ui/screen.css").contains(".shell.has-panel .legacy.content"), "the side panel keeps its column");
 }
 
 #[test]
@@ -213,14 +215,13 @@ fn every_icon_comes_from_the_same_logo() {
     // The artwork has one source: `assets/devd-logo.png`. Everything else is
     // generated from it by `scripts/make-icons.py`, so the mark in the window,
     // the icon on the taskbar and the favicon are the same picture.
+    // The page used to carry the mark inline. It is now the window's frame (`shell.js`), and its
+    // mark is the page's own icon, so there is one picture served as `/favicon.svg` rather than a
+    // copy pasted into the page beside it.
+    let shell = include_str!("../ui/shell.js");
+    assert!(shell.contains(r#""/favicon.svg""#), "the frame's mark is the page's icon");
+    assert!(!HTML.contains("data:image/png;base64,"), "the page no longer pastes a second copy of the logo");
     let desktop = include_bytes!("../../devd-desktop/icons/128x128.png");
-    let marker = "data:image/png;base64,";
-    let start = HTML.find(marker).expect("inline logo") + marker.len();
-    let end = HTML[start..].find('"').expect("inline logo end") + start;
-    let inline = &HTML[start..end];
-    let encoded = base64::engine::general_purpose::STANDARD.encode(desktop);
-    assert_eq!(inline, encoded, "the in-app mark is not the desktop icon");
-
     assert_eq!(&desktop[1..4], b"PNG");
     let width = u32::from_be_bytes(desktop[16..20].try_into().unwrap());
     let height = u32::from_be_bytes(desktop[20..24].try_into().unwrap());
@@ -349,7 +350,7 @@ fn server_and_site_tabs_match_the_agreed_information_architecture() {
             .unwrap_or_else(|| panic!("{label} is missing or out of order in the Sites tabs"));
         at += found + needle.len();
     }
-    assert!(APP.contains("{ view: \"sites\", area: \"sites\", label: \"Sites\""), "Sites is a first-class rail destination");
+    assert!(Rail::has("sites"), "Sites is a first-class rail destination");
     assert!(APP.contains("page(\"Environment\""), "the environment screen does not call itself a single server");
 
     let site = quoted_after(APP, "var SITE_TABS = [");
@@ -468,6 +469,11 @@ fn every_custom_property_the_stylesheet_uses_is_defined() {
             used.push(name);
         }
     }
+    // The number and size table is not written in the stylesheet: it is generated from
+    // `devd_app_core::size` and served as `/sizes.css`, so those names are defined too.
+    for size in devd_app_core::size::SIZES {
+        defined.push(format!("size-{}", size.name));
+    }
     used.sort();
     used.dedup();
     let mut missing: Vec<&String> = Vec::new();
@@ -477,6 +483,27 @@ fn every_custom_property_the_stylesheet_uses_is_defined() {
         }
     }
     assert!(missing.is_empty(), "these custom properties are used but never defined: {missing:?}");
+}
+
+#[test]
+fn the_page_is_handed_the_window_s_own_proportions() {
+    // `/sizes.css` and `/sizes.js` come from the same table the native window draws from. A page
+    // that used its own numbers would look like a different application.
+    let css = devd_app_core::size::css();
+    assert!(css.contains("--size-reading:"), "{css}");
+    let script = devd_app_core::size::script();
+    assert!(script.contains("\"reading\":"), "{script}");
+    // The page loads both before its own script, so its stylesheet and its code agree from the
+    // first paint.
+    let index = HTML;
+    let sizes_css = index.find("/sizes.css").expect("/sizes.css is linked");
+    let sizes_js = index.find("/sizes.js").expect("/sizes.js is loaded");
+    let app = index.find("/app.js").expect("/app.js is loaded");
+    assert!(sizes_css < app && sizes_js < app);
+    // And the rail and the areas come from the window's page table, not from a second list.
+    assert!(index.contains("/rail.js") && index.contains("/areas.js"));
+    let rail = devd_app_core::pages::rail_script();
+    assert!(rail.contains("\"label\":\"Projects\""));
 }
 
 #[test]
@@ -524,21 +551,20 @@ fn the_folder_picker_is_the_normal_way_to_choose_a_project() {
 }
 
 #[test]
-fn the_logo_has_no_transparent_padding_and_is_square() {
-    let marker = "data:image/png;base64,";
-    let start = HTML.find(marker).expect("inline logo") + marker.len();
-    let b64: String = HTML[start..].chars().take_while(|c| *c != '"').collect();
-    let png = base64::engine::general_purpose::STANDARD.decode(b64).unwrap();
-    assert_eq!(&png[1..4], b"PNG");
-    let w = u32::from_be_bytes(png[16..20].try_into().unwrap());
-    let h = u32::from_be_bytes(png[20..24].try_into().unwrap());
-    assert_eq!(w, h, "the logo is square, so a square box shows all of it");
-    assert!(w >= 80, "crisp at 40 CSS px on a 2x display");
-    // PNG colour type 2 is RGB: no alpha channel, so no transparent frame can exist.
-    assert_eq!(png[25], 2, "the logo asset has no alpha channel");
-    let rule = &CSS[CSS.find(".top-mark {").unwrap()..];
+fn the_frame_s_mark_has_no_transparent_padding_and_is_square() {
+    // The rail's mark is `/favicon.svg`, which is a square drawing; the frame gives it a square
+    // box (28px, rounded 7px) with no padding, so nothing of the artwork is cropped or framed.
+    let css = include_str!("../ui/shell.css");
+    let rule = &css[css.find(".shell-rail-mark {").expect("the frame has a mark")..];
     let rule = &rule[..rule.find('}').unwrap()];
-    assert!(rule.contains("object-fit: cover") && !rule.contains("padding") && !rule.contains("margin") && !rule.contains("box-shadow"), "{rule}");
+    assert!(rule.contains("width: 28px") && rule.contains("height: 28px"), "{rule}");
+    assert!(!rule.contains("padding"), "{rule}");
+    let favicon = include_str!("../ui/favicon.svg");
+    assert!(favicon.contains("viewBox"), "the mark is a drawing");
+    assert!(
+        favicon.replace('\n', " ").contains("\"0 0 ") || favicon.contains("viewBox=\"0 0 "),
+        "the mark's box starts at its corner"
+    );
 }
 
 #[test]
@@ -814,13 +840,13 @@ fn effort_belongs_to_the_model_picker() {
 
 #[test]
 fn polling_does_not_rebuild_an_open_menu() {
-    // The rail is painted by every timer. Replacing it while a menu is open
-    // would close the menu, replay its animation and move the pointer's target.
-    // The rail has no menus left to close, and it is patched, not replaced: focus and a
-    // pressed state survive a repaint.
-    assert!(APP.contains("if (force || html !== RAIL_CACHE.html) {"), "an unchanged rail is not repainted");
-    assert!(APP.contains("morph(el(\"rail\"), html);"), "the rail is patched in place");
-    assert!(APP.contains("RAIL_CACHE"), "the rail keeps its last markup");
+    // The window's frame is painted by every screen (`shell.js`). Its rail, its tabs and its strip
+    // are written only when what they say changed, so a timer that repaints the screens does not
+    // rebuild the frame under the pointer: the rail is redrawn only if its markup differs, and the
+    // area's tabs only when the area or the address changed.
+    let shell = include_str!("../ui/shell.js");
+    assert!(shell.contains("row.dataset.area !== (Shell.area || \"\")"), "an unchanged tab row is not rebuilt");
+    assert!(shell.contains("root.style.setProperty(\"--win-\" + name"), "the palette is set, not rebuilt");
     // A live refresh must not pull a page from under an open dialog either.
     assert!(APP.contains("[role=\\\"dialog\\\"]"), "an open dialog pauses live repainting");
     assert!(APP.contains("p.anchorAction"), "an open popover finds its trigger after a repaint");
@@ -1559,23 +1585,61 @@ fn the_tray_is_a_background_app_with_useful_actions() {
     assert!(desktop.contains("window.hide()"), "the window goes to the tray, not away");
 }
 
+/// The page's rail, as the server hands it to the frame: `window.DEVD_RAIL`.
+struct Rail;
+impl Rail {
+    fn entries() -> Vec<(String, String)> {
+        // What the page receives, `window.DEVD_RAIL=[...]`, as JSON once the assignment is removed.
+        let js = devd_app_core::pages::rail_script();
+        let body = js.trim_start_matches("window.DEVD_RAIL=").trim_end_matches(';');
+        let list: Vec<serde_json::Value> = serde_json::from_str(body).expect("the rail is valid JSON");
+        list.iter()
+            .map(|i| (i["segment"].as_str().unwrap_or_default().to_string(), i["label"].as_str().unwrap_or_default().to_string()))
+            .collect()
+    }
+    fn has(segment: &str) -> bool {
+        Self::entries().iter().any(|(s, _)| s == segment)
+    }
+    fn label(segment: &str) -> String {
+        Self::entries().into_iter().find(|(s, _)| s == segment).map(|(_, l)| l).unwrap_or_default()
+    }
+}
+
 #[test]
 fn the_rail_reports_live_work_on_every_screen() {
-    assert!(APP.contains("AI.liveThreadSig"), "conversations are read outside the assistant too");
-    assert!(APP.contains("live: working > 0"), "the assistant shows a live dot while it works");
-    assert!(APP.contains("live: live.length > 0"), "runs show a live dot while they work");
-    assert!(APP.contains("rail-badge-"), "the counts are tinted by state");
-    assert!(APP.contains("waiting for you"), "a waiting run says so in its hint");
-    assert!(APP.contains("threadRole(t) === \"devd\""), "specialists count as runs, not conversations");
+    // The frame's rail is the window's (`window.DEVD_RAIL`, `shell.js`), and what it says about work
+    // is the window's rule (`devd_app_core::chrome`), asked for on every screen: the badges count
+    // live runs and held runs, each in the colour of its worst state, and the waiting one says so.
+    assert!(Rail::has("assistant") && Rail::has("runs") && Rail::has("inbox"));
+    assert_eq!(Rail::label("runs"), "Runs", "the table reads: {}", devd_app_core::pages::rail_script());
+    assert_eq!(Rail::label("assistant"), "Assistant");
+    let shell = include_str!("../ui/shell.js");
+    assert!(shell.contains("/api/chrome"), "the frame asks the window's rules what is happening");
+    assert!(shielded("badge.count > 0"), "a count is drawn only when there is one");
+    let chrome = devd_app_core::chrome::of(
+        &serde_json::json!({ "health": { "state": "healthy" }, "inbox": [], "runs": [ { "state": "running" } ] }),
+        &[],
+        0,
+        "0.45.0",
+        None,
+        true,
+    );
+    assert_eq!(chrome.badges["runs"].count, 1, "a running run is counted on the rail");
 }
 
 #[test]
 fn the_rail_draws_one_indicator_per_icon() {
-    // A working conversation used to render the count badge and the live dot at
-    // the same corner, which read as two bubbles.
-    assert!(APP.contains("One indicator, never two"), "the renderer chooses one");
-    assert!(APP.contains("? '<span class=\"rail-badge rail-badge-'"), "the badge is the indicated state");
-    assert!(CSS.contains(".rail-icon .rail-badge ~ .rail-live"), "CSS refuses a second circle if markup ever allows it");
+    // A count and a second dot used to share one corner and read as two bubbles. The window's rail
+    // draws the count of what needs you first, and one dot at the foot only for something else
+    // also true of the screen: never two at the same corner.
+    assert!(shielded("badge.also ? '<span class=\"shell-rail-also\""), "the second mark is at the foot");
+    let css = include_str!("../ui/shell.css");
+    assert!(css.contains(".shell-rail-badge") && css.contains(".shell-rail-also"), "the two marks are styled once");
+    assert!(css.contains("bottom: 4px"), "the second mark is at the foot, not on the count");
+}
+
+fn shielded(needle: &str) -> bool {
+    include_str!("../ui/shell.js").contains(needle)
 }
 
 #[test]

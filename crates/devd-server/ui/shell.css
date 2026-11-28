@@ -1,0 +1,323 @@
+/* The frame of the page, drawn the way the native window draws it.
+ *
+ * The window is three bands: the rail of screens down the left edge, the bar across the top
+ * (back, forward, where you are, who is looking, search) above the screen, and the strip along
+ * the bottom (the machine's health, what is working, what it needs). The browser client used a
+ * different frame entirely; this file is that frame, with every colour from the window's theme
+ * and every size from the window's size table. The numbers and the palette arrive as
+ * `--win-*` and `--size-*` custom properties, generated from `devd_app_core::theme` and
+ * `devd_app_core::size`, so a change to the window moves this page with it.
+ *
+ * Nothing in the screens behind the frame is drawn here: this is the shell alone.
+ */
+
+.shell {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  background: var(--win-bg);
+  color: var(--win-text);
+  font: var(--size-text)/1.5 var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ------------------------------------------------------------------------------- the rail */
+
+.shell-rail {
+  width: var(--size-rail);
+  height: 100%;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 10px 0;
+  background: var(--win-surface);
+  border-right: 1px solid var(--win-line);
+}
+
+.shell-rail-mark {
+  width: 28px;
+  height: 28px;
+  flex: none;
+  margin-bottom: 10px;
+  border-radius: 7px;
+  object-fit: contain;
+}
+
+.shell-rail-item {
+  position: relative;
+  width: 38px;
+  height: 38px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: calc(var(--size-radius) + 2px);
+  background: none;
+  color: var(--win-faint);
+  cursor: pointer;
+  padding: 0;
+  transition: background-color 110ms ease-out, color 110ms ease-out;
+}
+
+.shell-rail-item:hover { background: var(--win-hover); color: var(--win-muted); }
+
+.shell-rail-item.is-current { background: var(--win-active); color: var(--win-text); }
+
+/* Where you are: a short bar of the signal colour at the rail's edge. */
+.shell-rail-item.is-current::before {
+  content: "";
+  position: absolute;
+  left: -9px;
+  top: 11px;
+  width: 3px;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--win-accent);
+}
+
+.shell-rail-item .icon { width: 17px; height: 17px; }
+
+/* A count, in the colour of the most urgent thing it counts. */
+.shell-rail-badge {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--win-warn);
+  color: var(--win-bg);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.shell-rail-badge.is-ok { background: var(--win-ok); }
+.shell-rail-badge.is-danger { background: var(--win-danger); }
+.shell-rail-badge.is-warn { background: var(--win-warn); }
+.shell-rail-badge.is-info { background: var(--win-info); }
+.shell-rail-badge.is-neutral { background: var(--win-faint); }
+
+/* Something else is also true of it: a dot of that colour at the foot of the button. */
+.shell-rail-also {
+  position: absolute;
+  bottom: 4px;
+  right: 5px;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  border: 2px solid var(--win-surface);
+  background: var(--win-info);
+}
+
+.shell-rail-gap { flex: 1 1 auto; }
+
+.shell-rail-divider {
+  width: 20px;
+  height: 1px;
+  flex: none;
+  margin: 6px 0;
+  background: var(--win-line);
+}
+
+/* A name on hover: the window's tooltip, in the page. */
+.shell-rail-item[data-tip]:hover::after,
+.shell-top-tip[data-tip]:hover::after {
+  content: attr(data-tip);
+  position: absolute;
+  left: calc(100% + 10px);
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 60;
+  padding: 4px 8px;
+  border-radius: var(--size-radius);
+  border: 1px solid var(--win-line-strong);
+  background: var(--win-raised);
+  color: var(--win-text);
+  font-size: var(--size-text-sm);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* ------------------------------------------------------------------------------ the column */
+
+.shell-column {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.shell-topbar {
+  height: var(--size-topbar);
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--win-line);
+}
+
+.shell-top-btn {
+  position: relative;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--size-radius);
+  background: none;
+  color: var(--win-muted);
+  cursor: pointer;
+  padding: 0;
+}
+
+.shell-top-btn:hover { background: var(--win-hover); }
+.shell-top-btn:disabled { color: color-mix(in srgb, var(--win-faint) 50%, transparent); cursor: default; background: none; }
+.shell-top-btn .icon { width: 14px; height: 14px; }
+
+/* Where you are: "Team › Schedules", then what is selected. */
+.shell-crumbs {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  font-size: var(--size-text);
+}
+.shell-crumbs .here { color: var(--win-text); font-weight: 500; white-space: nowrap; }
+.shell-crumbs .seal { color: var(--win-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 360px; }
+.shell-crumbs .sep { width: 11px; height: 11px; color: var(--win-faint); flex: none; }
+
+.shell-grow { flex: 1 1 auto; }
+
+.shell-faces { display: flex; align-items: center; gap: 4px; }
+
+.shell-face {
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--win-bg);
+  border: 0;
+  cursor: default;
+}
+
+.shell-face.is-live { box-shadow: 0 0 0 2px color-mix(in srgb, var(--win-info) 55%, transparent); }
+
+.shell-search {
+  width: 280px;
+  height: var(--size-control);
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 9px;
+  border: 1px solid var(--win-line);
+  border-radius: var(--size-radius);
+  background: var(--win-surface);
+  color: var(--win-faint);
+  font-size: var(--size-text-sm);
+  cursor: pointer;
+}
+.shell-search:hover { background: var(--win-hover); }
+.shell-search .icon { width: 13px; height: 13px; flex: none; }
+.shell-search .label { flex: 1 1 auto; text-align: left; }
+.shell-search kbd {
+  height: 18px;
+  padding: 0 5px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 4px;
+  border: 1px solid var(--win-line-strong);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
+/* The area's tabs: the window's second row under the top bar. */
+.shell-subnav {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 12px;
+  height: 40px;
+  border-bottom: 1px solid var(--win-line);
+  overflow-x: auto;
+}
+
+.shell-tab {
+  position: relative;
+  height: 40px;
+  padding: 0 10px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--win-muted);
+  font-size: var(--size-text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.shell-tab:hover { color: var(--win-text); }
+.shell-tab.is-current { color: var(--win-text); font-weight: 500; border-bottom-color: var(--win-accent); }
+
+.shell-screen {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  background: var(--win-bg);
+}
+
+/* ------------------------------------------------------------------------------- the strip */
+
+.shell-status {
+  height: var(--size-status);
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 12px;
+  border-top: 1px solid var(--win-line);
+  background: var(--win-surface);
+  color: var(--win-faint);
+  font-size: var(--size-text-xs);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.shell-status .piece { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.shell-status .piece b { color: var(--win-muted); font-weight: 400; overflow: hidden; text-overflow: ellipsis; }
+.shell-status .is-warn { color: var(--win-warn); }
+.shell-status .version { margin-left: auto; }
+
+/* The dot the window puts before a state: a filled circle, always beside the word for it. */
+.win-dot { width: 7px; height: 7px; border-radius: 999px; flex: none; background: var(--win-faint); }
+.win-dot.ok { background: var(--win-ok); }
+.win-dot.warn { background: var(--win-warn); }
+.win-dot.danger { background: var(--win-danger); }
+.win-dot.info { background: var(--win-info); }
+.win-dot.neutral { background: var(--win-faint); }
+.win-dot.live { animation: win-pulse 1.4s ease-in-out infinite; }
+
+@keyframes win-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.42; } }
+@media (prefers-reduced-motion: reduce) { .win-dot.live { animation: none; } }
+
+/* Narrow windows: the search folds to its icon, as the window's top bar does. */
+@media (max-width: 900px) {
+  .shell-search { width: auto; }
+  .shell-search .label, .shell-search kbd { display: none; }
+}

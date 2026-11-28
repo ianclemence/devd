@@ -24,9 +24,12 @@
 //! the surfaces are views of it.
 
 pub mod command;
+pub mod chrome;
 pub mod diff;
 pub mod flow;
+pub mod frame;
 pub mod fuzzy;
+pub mod glyphs;
 pub mod links;
 pub mod markdown;
 pub mod motion;
@@ -36,6 +39,7 @@ pub mod pages;
 pub mod presence;
 pub mod project;
 pub mod scorecard;
+pub mod size;
 pub mod spell;
 pub mod status;
 pub mod surface;

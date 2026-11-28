@@ -269,28 +269,46 @@ pub fn shells(
     // The screen: what the shell has printed, with a block where typing goes while it runs.
     let key_id = chosen.clone();
     let click_focus = focus.clone();
+    // A terminal's blank lines are where the program put them, and a shell's screen holds many of
+    // them: kept at a full row's height, a handful of commands left half the panel empty. A run of
+    // empty lines is therefore one short gap, and the lines with text keep the room a line needs
+    // to be read (a little more than the type, not less).
+    let line = (size::TEXT_SM * 1.5).max(19.0);
+    let blank_gap = line * 0.45;
     let mut col = div()
         .flex()
         .flex_col()
         .p(px(12.0))
         .font_family(mono())
         .text_size(px(size::TEXT_SM))
-        .line_height(px(18.0))
+        .line_height(px(line))
         .text_color(t.text);
     let last = lines.len().saturating_sub(1);
-    for (n, line) in lines.iter().enumerate() {
+    for (n, text) in lines.iter().enumerate() {
+        if text.is_empty() {
+            // A blank the cursor stands on still gets a row, so the caret has a place to be.
+            let cursor_here = n == last && running;
+            col = col.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .h(px(if cursor_here { line } else { blank_gap }))
+                    .child(if cursor_here {
+                        div().w(px(8.0)).h(px(line * 0.8)).bg(t.accent).into_any_element()
+                    } else {
+                        div().into_any_element()
+                    }),
+            );
+            continue;
+        }
         let mut row = div()
             .flex()
             .items_center()
-            .min_h(px(18.0))
+            .min_h(px(line))
             .whitespace_nowrap()
-            .child(if line.is_empty() {
-                " ".to_string()
-            } else {
-                line.clone()
-            });
+            .child(text.clone());
         if n == last && running {
-            row = row.child(div().ml(px(1.0)).w(px(8.0)).h(px(15.0)).bg(t.accent));
+            row = row.child(div().ml(px(1.0)).w(px(8.0)).h(px(line * 0.8)).bg(t.accent));
         }
         col = col.child(row);
     }

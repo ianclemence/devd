@@ -185,6 +185,57 @@ pub const PAGES: &[Page] = &[
     },
 ];
 
+/// One screen on the rail, in the order it is drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RailItem {
+    /// What it says.
+    pub label: &'static str,
+    /// Its name in a path.
+    pub segment: &'static str,
+    /// The icon the window draws beside it (an `icons/<name>.svg` in the window's set).
+    pub icon: &'static str,
+    /// The area behind it, when it has pages.
+    pub area: Option<Area>,
+}
+
+/// The rail, top to bottom. The window and the browser client both draw this list, so neither
+/// can have a screen the other does not, or in a different order.
+pub const RAIL: &[RailItem] = &[
+    RailItem { label: "Home", segment: "home", icon: "home", area: None },
+    RailItem { label: "Inbox", segment: "inbox", icon: "inbox", area: None },
+    RailItem { label: "Assistant", segment: "assistant", icon: "assistant", area: None },
+    RailItem { label: "Runs", segment: "runs", icon: "runs", area: Some(Area::Runs) },
+    RailItem { label: "Team", segment: "team", icon: "team", area: Some(Area::Team) },
+    RailItem { label: "Intelligence", segment: "intelligence", icon: "models", area: None },
+    RailItem { label: "Projects", segment: "projects", icon: "folder", area: Some(Area::Projects) },
+    RailItem { label: "Sites", segment: "sites", icon: "globe", area: Some(Area::Sites) },
+    RailItem { label: "Server", segment: "server", icon: "machine", area: Some(Area::Server) },
+    RailItem { label: "Activity", segment: "activity", icon: "clock", area: None },
+    RailItem { label: "Settings", segment: "settings", icon: "settings", area: Some(Area::Settings) },
+];
+
+/// The rail as a script (`window.DEVD_RAIL`), for the page to draw it from the same list.
+pub fn rail_script() -> String {
+    let mut out = String::from("window.DEVD_RAIL=[");
+    for (i, item) in RAIL.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        let area = match item.area {
+            Some(a) => format!("{:?}", a.home().path()),
+            None => "null".to_string(),
+        };
+        out.push_str(&format!(
+            "{{\"label\":{:?},\"segment\":{:?},\"icon\":{:?},\"area\":{area}}}",
+            item.label,
+            item.segment,
+            item.icon
+        ));
+    }
+    out.push_str("];");
+    out
+}
+
 /// The page with this id.
 pub fn find(id: &str) -> Option<&'static Page> {
     PAGES.iter().find(|p| p.id == id)
@@ -195,6 +246,9 @@ pub fn area_of(route: &Route) -> Option<Area> {
     match route {
         Route::Projects(_) | Route::Project(..) => Some(Area::Projects),
         Route::Sites(_) => Some(Area::Sites),
+        // Runs has pages behind it (Recreate), so it is an area like the others: its screen and
+        // its pages share a row of tabs.
+        Route::Runs(_) => Some(Area::Runs),
         Route::Team => Some(Area::Team),
         Route::Server => Some(Area::Server),
         Route::Settings => Some(Area::Settings),
@@ -302,5 +356,32 @@ mod tests {
     fn an_unknown_page_is_not_a_route() {
         assert!(Route::parse("/not-a-page").is_none());
         assert!(find("not-a-page").is_none());
+    }
+
+    #[test]
+    fn the_rail_is_every_screen_once_and_each_leads_somewhere() {
+        // The window draws this list and the browser client draws the same one, so a screen added
+        // to one is a screen in both.
+        let mut labels: Vec<&str> = RAIL.iter().map(|r| r.label).collect();
+        let n = labels.len();
+        labels.sort_unstable();
+        labels.dedup();
+        assert_eq!(labels.len(), n, "a screen is listed twice");
+        for item in RAIL {
+            let route = Route::parse(item.segment).expect("a rail item names a screen");
+            assert_eq!(route.path(), format!("/{}", item.segment), "{}", item.label);
+            assert_eq!(route.title(), item.label, "{}", item.segment);
+            assert_eq!(area_of(&route).is_some(), item.area.is_some(), "{}", item.label);
+            assert!(!item.icon.is_empty(), "{} has no icon", item.label);
+        }
+        // Every area the pages belong to has a place on the rail.
+        for area in [Area::Projects, Area::Sites, Area::Runs, Area::Team, Area::Server, Area::Settings] {
+            assert!(RAIL.iter().any(|r| r.area == Some(area)), "{area:?} is not on the rail");
+        }
+        let script = rail_script();
+        assert!(script.starts_with("window.DEVD_RAIL=["));
+        assert!(script.contains("\"label\":\"Home\""));
+        assert!(script.contains("\"segment\":\"projects\""));
+        assert!(script.contains("\"area\":\"/projects\""));
     }
 }

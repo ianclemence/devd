@@ -1,0 +1,244 @@
+/* The screens, in the window's palette.
+ *
+ * Loaded after `style.css`, which is the screen layout the browser client was built with. Every
+ * colour token and every size that stylesheet defines is re-pointed here at the window's own:
+ * `--win-*` (the palette the window draws, from `/themes.js`) and `--size-*` (the window's
+ * measurements, from `/sizes.css`). The component rules are untouched: this file replaces the
+ * second design system's values, not its structure. A screen therefore reads in Sling, Dawn,
+ * Psalm, Sharon or Daybreak - whichever the person chose for the window - with the window's
+ * accent, its type scale, its radii and its reading column.
+ */
+
+:root {
+  color-scheme: light dark;
+
+  /* Surfaces */
+  --bg: var(--win-bg);
+  --bg-deep: var(--win-code);
+  --bg-rail: var(--win-surface);
+  --bg-surface: var(--win-surface);
+  --bg-raised: var(--win-raised);
+  --bg-hover: var(--win-hover);
+  --line: var(--win-line);
+  --line-strong: var(--win-line-strong);
+  --line-control: var(--win-line-strong);
+  --overlay: var(--win-scrim);
+  --selection: var(--win-selection);
+
+  /* Text */
+  --fg: var(--win-text);
+  --fg-mute: var(--win-muted);
+  --fg-dim: var(--win-faint);
+
+  /* The accent: the window's one signal colour. */
+  --accent: var(--win-accent);
+  --accent-strong: var(--win-accent);
+  --accent-quiet: var(--win-accent-soft);
+  --accent-line: color-mix(in srgb, var(--win-accent) 42%, transparent);
+  --accent-text: var(--win-accent);
+  --on-accent: var(--win-on-accent);
+
+  /* Status */
+  --ok: var(--win-ok);
+  --ok-quiet: color-mix(in srgb, var(--win-ok) 14%, transparent);
+  --ok-line: color-mix(in srgb, var(--win-ok) 42%, transparent);
+  --warn: var(--win-warn);
+  --warn-quiet: color-mix(in srgb, var(--win-warn) 14%, transparent);
+  --warn-line: color-mix(in srgb, var(--win-warn) 42%, transparent);
+  --on-warn: var(--win-bg);
+  --danger: var(--win-danger);
+  --danger-quiet: color-mix(in srgb, var(--win-danger) 14%, transparent);
+  --danger-line: color-mix(in srgb, var(--win-danger) 42%, transparent);
+  --info: var(--win-info);
+  --info-quiet: color-mix(in srgb, var(--win-info) 14%, transparent);
+  --info-line: color-mix(in srgb, var(--win-info) 42%, transparent);
+
+  --dot-ok: var(--win-ok);
+  --dot-warn: var(--win-warn);
+  --dot-bad: var(--win-danger);
+  --dot-live: var(--win-info);
+  --dot-off: var(--win-faint);
+
+  /* Diffs */
+  --diff-add-bg: var(--win-diff-added);
+  --diff-add-fg: var(--win-ok);
+  --diff-del-bg: var(--win-diff-removed);
+  --diff-del-fg: var(--win-danger);
+  --stripe: color-mix(in srgb, var(--win-text) 3%, transparent);
+  --scrollbar-thumb: var(--win-line-strong);
+  --scrollbar-thumb-hover: var(--win-muted);
+
+  /* Size and shape: the window's every one. */
+  --top-h: var(--size-topbar);
+  --reading: var(--size-reading);
+  --radius-sm: var(--size-radius-s);
+  --radius: var(--size-radius);
+  --radius-lg: var(--size-radius-l);
+  --status-h: var(--size-status);
+  --h-control: var(--size-control);
+  --h-control-sm: calc(var(--size-control) - 4px);
+  --h-control-lg: calc(var(--size-control) + 4px);
+  --h-pane-head: var(--size-topbar);
+
+  /* Charts and the small figures inside a reply keep their hues, but from the window's family. */
+  --viz-1: var(--win-accent);
+  --viz-2: var(--win-info);
+  --viz-3: var(--win-warn);
+  --viz-4: var(--win-ok);
+  --viz-5: var(--win-danger);
+}
+
+/* The page itself is the window's surface, behind whatever a theme's art shows. */
+body {
+  background-color: var(--win-bg);
+  background-image: none;
+  color: var(--win-text);
+}
+
+/* Screens sit on the window's own background; the frame is `shell.css`. */
+.content,
+.main,
+.page {
+  background: transparent;
+}
+
+/* The old frame is not drawn: the window's own frame is. The page's rail and its top bar are
+ * removed from the document entirely (see the `retire` step in `app.js`), and its footer, its
+ * crumbs and the panel's backdrop are hidden here so nothing of the second frame can show. */
+.statusbar,
+.crumbs,
+.panel-scrim,
+.rail-brand,
+.rail-foot {
+  display: none !important;
+}
+
+/* The area's tabs are the window's row (`shell.css`); the page's own `#subnav` stays empty. */
+#subnav { display: none !important; }
+
+/* ------------------------------------------------------------------ the conversation list
+ *
+ * The window's list, measured from its own code (`assistant.rs`): a 288px column with a hairline
+ * on its right, a 44px header saying "Conversations" with a New button, one 34px row per
+ * conversation, a project's name in small caps above its rows, and "Clear finished" along the
+ * bottom. The page's list is drawn in that shape; what it says is its own data.
+ */
+.shell.has-panel .legacy.content {
+  display: grid;
+  grid-template-columns: var(--size-sidebar) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  height: 100%;
+}
+
+.shell.has-panel .legacy.content > #panel {
+  display: flex !important;
+  width: var(--size-sidebar);
+  min-width: var(--size-sidebar);
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-right: 1px solid var(--win-line);
+  background: var(--win-surface);
+  overflow: hidden;
+  flex-direction: column;
+}
+
+.shell.has-panel .main {
+  height: 100%;
+  overflow: auto;
+  min-width: 0;
+}
+
+/* With no list, the screen has the window. */
+.shell:not(.has-panel) .legacy.content { height: 100%; }
+.shell:not(.has-panel) .legacy.content > #panel { display: none !important; }
+
+#panel .panel-inner,
+#panel .ui-head {
+  display: none;
+}
+
+#panel .thread-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 8px;
+}
+
+.thread-group-head {
+  height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--win-radius, 6px);
+  background: none;
+  color: var(--win-muted);
+  font-size: var(--size-text-sm);
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+}
+
+.thread-group-head:hover { background: var(--win-hover); }
+.thread-group-head .icon { width: 12px; height: 12px; opacity: 0.6; }
+.thread-group-head .grow { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.thread-group-head .thread-count { color: var(--win-faint); font-size: var(--size-text-xs); font-weight: 400; white-space: nowrap; }
+
+.thread-row {
+  position: relative;
+  min-height: 34px;
+  display: flex;
+  align-items: stretch;
+  border-radius: var(--win-radius, 6px);
+}
+
+.thread-row:hover { background: var(--win-hover); }
+.thread-row.active, .thread-row:has(.thread.active) { background: var(--win-active); }
+
+.thread {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: inherit;
+  background: none;
+  color: var(--win-text);
+  font: inherit;
+  font-size: var(--size-text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.thread-line1, .thread-line2 { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.thread-line2 { color: var(--win-faint); font-size: var(--size-text-xs); }
+.thread-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.thread-time { margin-left: auto; color: var(--win-faint); font-size: var(--size-text-xs); }
+.thread-row.is-settled .thread-title { color: var(--win-muted); }
+
+.thread-del {
+  width: 26px;
+  flex: none;
+  border: 0;
+  background: none;
+  color: var(--win-faint);
+  cursor: pointer;
+  opacity: 0;
+  border-radius: var(--win-radius, 6px);
+}
+.thread-row:hover .thread-del { opacity: 1; }
+.thread-del:hover { background: var(--win-hover); color: var(--win-text); }
+
+/* The strip along the bottom of the list: the window's "Clear finished". */
+#panel .panel-foot, #panel .thread-clear {
+  flex: none;
+  border-top: 1px solid var(--win-line);
+  padding: 8px;
+}

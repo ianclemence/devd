@@ -173,9 +173,11 @@ pub fn render(shell: &mut Shell, _window: &mut Window, cx: &mut Context<Shell>) 
         column = column.child(choose_tools(cx));
     }
 
-    // Ask.
+    // Ask. Home's own message box: it has its own text and attachments, separate from the
+    // Assistant's, so a file attached here is here and nowhere else.
     column = column.child(super::compose::view(
         shell,
+        crate::shell::ComposerScreen::Home,
         "Enter to send",
         100_000.0,
         cx,

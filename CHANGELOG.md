@@ -10,6 +10,35 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.45.0] - 2026-11-28 - Two boxes, one table
+
+### Fixed
+
+- **The window's two message boxes are two boxes.** Home and the Assistant showed
+  one composer: a file attached on Home appeared in the Assistant's box, and a draft
+  belonged to neither. Each now has its own text, attachments and model/mode/effort
+  choices, and every button acts on the box of the screen in front.
+- **A picture attached in the window is drawn as a picture.** The composer shows a
+  thumbnail with its name (press it to open it full size), decoded only when the bytes
+  really are an image, once per file.
+- **The terminal's lines have room to read.** A line was 12px type in an 18px row with
+  blank lines taking a full row each, so a shell's screen was mostly empty space; text
+  lines now get a line box taller than the type and runs of blank lines a short gap.
+- **The font size increase was being undone on the page.** A `:root` block late in the
+  stylesheet restated the type scale with the old, smaller numbers; it is gone, and the
+  scale now comes from the shared table.
+
+### Changed
+
+- **One table of proportions for both interfaces.** `devd_app_core::size` holds the
+  rail, top bar, reading column, radii and the type scale; the window's constants are
+  checked against it by a test, and the page is served the same numbers as
+  `/sizes.css` and `/sizes.js`. The rail and each area's tabs come from
+  `devd_app_core::pages::RAIL`, served as `/rail.js` and `/areas.js`.
+- `area_of` now reports the Runs screen as an area, as its pages (`Recreate`) assumed.
+
+---
+
 ## [0.44.0] - 2026-11-28 - It reads the picture, and it reads your eye
 
 ### Added
