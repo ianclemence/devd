@@ -227,8 +227,10 @@ pub fn with_files(message: &str, files: &[PathBuf]) -> String {
         return message.to_string();
     }
     let list: Vec<String> = files.iter().map(|f| format!("- {}", f.display())).collect();
+    // The marker is the one the agent reads pictures by, and the list goes last so
+    // every path is the last thing in the message whatever was typed above it.
     format!(
-        "{message}\n\nAttached (read them from disk):\n{}",
+        "{message}\n\nAttached files:\n{}\n",
         list.join("\n")
     )
 }
@@ -1115,9 +1117,11 @@ mod tests {
         assert_eq!(with_files("hi", &[]), "hi");
         let said = with_files("look", &[PathBuf::from("a.txt"), PathBuf::from("src")]);
         assert!(
-            said.starts_with("look\n\nAttached")
-                && said.contains("- a.txt")
-                && said.contains("- src")
+            said.starts_with("look\n\nAttached files:\n- a.txt\n- src"),
+            "{said}"
         );
+        // The same marker the agent reads pictures by: a picture attached from
+        // the window reached the model as a bare path when the words were its own.
+        assert!(said.trim_end().ends_with("- src"), "the list ends the message");
     }
 }

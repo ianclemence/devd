@@ -10,6 +10,59 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.44.0] - 2026-11-28 - It reads the picture, and it reads your eye
+
+### Added
+
+- **A picture attached in the window reaches the model.** The window's composer wrote
+  its file list under its own words, and only the browser client's words were read, so
+  an image attached from the native window arrived as a path and nothing else. Both
+  writers now say "Attached files:", and a `devd://` address whose project has a space
+  in its name (`D:\my work`) is one link again instead of being cut at the `%`.
+- **DeepSeek's newer chat models are known to see.** `deepseek-flash` and the
+  `deepseek-v*` line accept images (checked against the provider), so a picture sent to
+  them is sent as a picture. A model nobody has information about is still offered the
+  picture and asked again without it, rather than losing the turn.
+- **Files that are not pictures are readable by the agent.** The turn now tells the
+  model that the attached files exist, that they are in devd's uploads folder, and that
+  its own file tools may open them, so "read the note I attached" works with a text-only
+  model as well.
+- **Commands is a tab, not a task list.** The project page's Run tab and its TASKS
+  heading are one word, **Commands**, in the window and in the browser client.
+
+### Changed
+
+- **Commands come under the agent's face.** In a conversation, the steps an agent ran
+  used to sit above the avatar whose turn they belonged to; they now start in the column
+  under it, so the steps and the words of one agent's turn line up as one block.
+- **Each list keeps its own width.** Dragging the Runs list wider no longer widens the
+  conversations list on the other screen, and the reverse.
+- **The type is a step larger, everywhere.** Every size in the window's scale and in the
+  browser client's tokens moved up by one (11→12 through 14→15, headings with them), and
+  the page columns grew to match, so nothing wraps that did not before.
+- **A marked word is a mark.** Inline code, links, file names and `devd://` chips are
+  drawn with rounded corners and a little air on each side, in replies and in the
+  browser client, instead of as tinted letters.
+- **Tools and the Server screen open at once.** `toolchain.list` runs every tool
+  executable on the machine; the result is now kept for the life of the process (and
+  thrown away whenever a tool is installed or removed), and the Tools screen draws the
+  list it had while the check runs behind it, instead of an empty page.
+
+### Fixed
+
+- **A deleted conversation leaves the screen.** Deleting the conversation that was open
+  removed its row but left its transcript on the page; the Assistant now returns to its
+  start screen, where a new message begins.
+- **A project chip opens the project.** If the named folder is not imported yet (the
+  window run from its own source, for one), it is imported on the way, so the link lands
+  on the project rather than on a page that can only say the project is missing.
+- **A folder inside another repository is not read as empty.** A project whose parent
+  folder is also a checkout is no longer listed with no files when git has nothing to say
+  about it; the folder is walked instead. This also unbreaks the file search index in
+  that case.
+
+---
+
 ## [0.43.1] - 2026-11-27 - A finished run is always on record
 
 ### Fixed

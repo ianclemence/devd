@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 use devd_core::{util, DevdError, Result};
 
@@ -272,9 +273,99 @@ pub fn extract_version(text: &str, regex: Option<&str>) -> Option<String> {
     util::extract_version(text, regex)
 }
 
+/// What each executable answered about itself, and the generation it answered under.
+type Answers = (u64, std::collections::HashMap<String, Option<Said>>);
+
+/// The answers tools gave about themselves, and the change count they were given under.
+fn looked_up() -> &'static std::sync::Mutex<Answers> {
+    static SEEN: std::sync::OnceLock<std::sync::Mutex<Answers>> = std::sync::OnceLock::new();
+    SEEN.get_or_init(|| std::sync::Mutex::new((0, std::collections::HashMap::new())))
+}
+
+/// What asking a tool for its version came to: what it printed, and whether it exited cleanly.
+#[derive(Debug, Clone)]
+struct Said {
+    /// What the tool answered: its output, both streams, or why it did not run.
+    text: String,
+    /// Whether it exited successfully.
+    ok: bool,
+}
+
 impl ToolDef {
+    /// What each executable this tool names answered, kept for the life of the process.
+    ///
+    /// A version cannot change underneath devd without the tool being installed or removed, and
+    /// those calls discard every kept answer (`memo::bump`), so asking a tool `--version` a second
+    /// time is a process launch spent on an answer already known. Bumped answers fall out of the
+    /// map the next time it is read, so a reinstall is seen at once.
+    fn kept(&self, extra_dirs: &[PathBuf]) -> Vec<(String, Option<Said>)> {
+        let args = self.version_args();
+        let mut out = Vec::new();
+        for exe in &self.exes {
+            let key = format!("{}\u{0}{}", args.join("\u{0}"), *exe);
+            // The lock is taken, read and released; the tool runs while nothing is held, so the
+            // tools run side by side and a launcher's seconds do not stop every other answer.
+            let known = looked_up().lock().ok().and_then(|mut seen| {
+                if seen.0 != devd_core::memo::generation() {
+                    seen.1.clear();
+                    seen.0 = devd_core::memo::generation();
+                }
+                seen.1.get(&key).cloned()
+            });
+            let said = match known {
+                Some(said) => said,
+                None => {
+                    let said = which_in(exe, extra_dirs).map(|(path, _)| {
+                        match util::run(&path, &args, None, &[], Some(self.version_timeout())) {
+                            Ok(out) => Said { text: format!("{}\n{}", out.stdout, out.stderr), ok: out.ok() },
+                            Err(e) => Said { text: e.to_string(), ok: false },
+                        }
+                    });
+                    if let Ok(mut seen) = looked_up().lock() {
+                        seen.1.insert(key, said.clone());
+                    }
+                    said
+                }
+            };
+            out.push((exe.clone(), said));
+        }
+        out
+    }
+
+    /// The arguments that ask for a version.
+    fn version_args(&self) -> Vec<String> {
+        if self.version_args.is_empty() {
+            vec!["--version".to_string()]
+        } else {
+            self.version_args.clone()
+        }
+    }
+
+    /// How long to wait for the tool's own answer before calling it a broken one.
+    ///
+    /// Most tools say their version at once. A few are launchers: on this machine `cmake` spends
+    /// nearly three seconds starting up and `pip` two, and asking them for a version is the slowest
+    /// part of listing every tool. They get the time they need, and the tools that do not stay
+    /// quick to be marked missing.
+    fn version_timeout(&self) -> Duration {
+        const SLOW: &[&str] = &["cmake", "pip", "pip3", "conda", "mvn", "gradle", "docker", "winget"];
+        if self.exes.iter().any(|e| SLOW.iter().any(|s| e.eq_ignore_ascii_case(s))) {
+            Duration::from_secs(20)
+        } else {
+            Duration::from_secs(5)
+        }
+    }
+
     /// Detect the tool.
     pub fn probe(&self, extra_dirs: &[PathBuf]) -> ToolStatus {
+        // An answer already known is not asked for again: the tool is found, and its answer read
+        // from the first run this process made, unless something has been installed or removed.
+        let answers = self.kept(extra_dirs);
+        self.probe_with(extra_dirs, &answers)
+    }
+
+    /// Detect the tool, reading each executable's answer from `answers` when it has one.
+    fn probe_with(&self, extra_dirs: &[PathBuf], answers: &[(String, Option<Said>)]) -> ToolStatus {
         let mut st = ToolStatus {
             id: self.id.clone(),
             name: self.name.clone(),
@@ -295,14 +386,20 @@ impl ToolDef {
             let Some((path, managed)) = which_in(exe, extra_dirs) else {
                 continue;
             };
-            let args = if self.version_args.is_empty() {
-                vec!["--version".to_string()]
-            } else {
-                self.version_args.clone()
+            let kept = answers.iter().find(|(e, _)| e == exe).and_then(|(_, said)| said.clone());
+            let said = match kept {
+                Some(said) => said,
+                None => {
+                    let args = self.version_args();
+                    match util::run(&path, &args, None, &[], Some(self.version_timeout())) {
+                        Ok(out) => Said { text: format!("{}\n{}", out.stdout, out.stderr), ok: out.ok() },
+                        Err(e) => Said { text: e.to_string(), ok: false },
+                    }
+                }
             };
-            match util::run(&path, &args, None, &[], Some(Duration::from_secs(15))) {
-                Ok(out) => {
-                    let text = format!("{}\n{}", out.stdout, out.stderr);
+            match said.ok {
+                true => {
+                    let text = said.text.clone();
                     // The program that answered has to be this tool and not
                     // another one that happens to share its name.
                     if let Some(need) = &self.version_require {
@@ -320,7 +417,7 @@ impl ToolDef {
                     let version = extract_version(&text, self.version_regex.as_deref());
                     // Some tools print their version to a non-zero exit; a
                     // version we could parse is proof enough that it runs.
-                    let installed = out.ok() || version.is_some();
+                    let installed = said.ok || version.is_some();
                     if installed {
                         st.path = Some(path.display().to_string());
                         st.source = Some(if managed { "devd-runtime" } else { "path" }.to_string());
@@ -336,11 +433,11 @@ impl ToolDef {
                     // Try the next name before saying anything about it.
                     st.problem = Some(format!(
                         "`{exe}` was found but failed to run: {}",
-                        util::truncate(out.stderr.trim(), 200)
+                        util::truncate(said.text.trim(), 200)
                     ));
                 }
-                Err(e) => {
-                    st.problem = Some(format!("`{exe}` was found but did not run: {e}"));
+                false => {
+                    st.problem = Some(format!("`{exe}` was found but did not run: {}", said.text.trim()));
                 }
             }
         }
@@ -636,8 +733,26 @@ pub struct ServiceState {
 }
 
 fn tcp_open(port: u16) -> bool {
+    // The list of tools asks this for every service on every refresh. A refused connection on
+    // loopback is answered by the machine at once, so a short wait only costs time on the ports
+    // that would have refused anyway; and a port is probed once, then trusted for two seconds,
+    // so the list, the health screen and a screen opening together do not each pay for it.
+    static OPEN: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<u16, (std::time::Instant, bool)>>> =
+        std::sync::OnceLock::new();
+    let recent = OPEN
+        .get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+        .lock()
+        .ok()
+        .and_then(|seen| seen.get(&port).filter(|(at, _)| at.elapsed() < Duration::from_secs(2)).map(|(_, open)| *open));
+    if let Some(open) = recent {
+        return open;
+    }
     let addr: SocketAddr = ([127, 0, 0, 1], port).into();
-    TcpStream::connect_timeout(&addr, Duration::from_millis(400)).is_ok()
+    let open = TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok();
+    if let Ok(mut seen) = OPEN.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new())).lock() {
+        seen.insert(port, (std::time::Instant::now(), open));
+    }
+    open
 }
 
 fn windows_service_names() -> &'static [String] {
@@ -705,9 +820,20 @@ impl ToolDef {
         let mut health_missing = false;
         if listening && !svc.health.is_empty() {
             if let Some((exe, _)) = which_in(&svc.health[0], &[]) {
-                healthy = util::run(&exe, &svc.health[1..], None, &[], Some(Duration::from_secs(10)))
-                    .map(|o| o.ok())
-                    .unwrap_or(false);
+                // The health command is a program, run for every service on every refresh; its
+                // answer is kept for a few seconds, the way a port's is.
+                healthy = devd_core::memo::cached(
+                    &format!("health:{}", svc.port),
+                    Duration::from_secs(5),
+                    || {
+                        let ok = util::run(&exe, &svc.health[1..], None, &[], Some(Duration::from_secs(10)))
+                            .map(|o| o.ok())
+                            .unwrap_or(false);
+                        Ok(json!({ "ok": ok }))
+                    },
+                )
+                .map(|v| v["ok"].as_bool().unwrap_or(false))
+                .unwrap_or(false);
             } else {
                 // A port that is open is not a service that answered. If the
                 // protocol check cannot run, say so instead of promoting the
@@ -862,3 +988,8 @@ mod tests {
         assert_eq!(extract_version("go version go1.24.1 linux/amd64", Some(r"go(\d+\.\d+(?:\.\d+)?)")).as_deref(), Some("1.24.1"));
     }
 }
+
+
+
+
+

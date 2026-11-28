@@ -67,6 +67,10 @@ pub struct Devd {
     pub sidebar_collapsed: bool,
     /// How wide the conversation list is, as the person dragged it.
     pub list_width: f32,
+    /// How wide the Runs list is, as the person dragged it. It has its own width: the two
+    /// lists hold different things, and making one wider is not a request to make the other one
+    /// wider on a screen the person cannot see.
+    pub runs_width: f32,
     /// How wide the browser and terminal column is, once the person has dragged it. `None` is the default share.
     pub pane_width: Option<f32>,
     /// Whether the navigation rail is put away, so the screen has the whole window.
@@ -259,6 +263,7 @@ pub fn start(conn: Arc<Connection>, cx: &mut App) {
         beats: 0,
         sidebar_collapsed: false,
         list_width: crate::theme::size::SIDEBAR,
+        runs_width: crate::theme::size::SIDEBAR,
         pane_width: None,
         rail_hidden: false,
         drag: None,

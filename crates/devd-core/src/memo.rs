@@ -47,6 +47,12 @@ pub fn bump() {
     GENERATION.fetch_add(1, Ordering::SeqCst);
 }
 
+/// The number that changes whenever anything did. A cache of its own compares this with the
+/// number it kept to know whether what it holds was answered before the change.
+pub fn generation() -> u64 {
+    GENERATION.load(Ordering::SeqCst)
+}
+
 fn fresh(key: &str, ttl: Duration) -> Option<Value> {
     let now = GENERATION.load(Ordering::SeqCst);
     let table = table().lock().unwrap_or_else(|e| e.into_inner());

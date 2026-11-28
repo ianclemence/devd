@@ -529,10 +529,10 @@ pub mod size {
     pub const STATUS: f32 = 26.0;
     /// The widest a page's content column gets. One number for the whole app: screens used 860,
     /// 900, 980 and 1040 for the same job, so the column changed width as you moved between them.
-    pub const PAGE: f32 = 980.0;
+    pub const PAGE: f32 = 1040.0;
 
     /// The same, for a page that shows diffs and file trees and needs the room.
-    pub const PAGE_WIDE: f32 = 1180.0;
+    pub const PAGE_WIDE: f32 = 1240.0;
 
     /// A list that sits beside the main content.
     pub const SIDEBAR: f32 = 288.0;
@@ -544,7 +544,7 @@ pub mod size {
     /// A button, an input, a tab.
     pub const CONTROL: f32 = 28.0;
     /// The widest a column of reading text gets.
-    pub const READING: f32 = 760.0;
+    pub const READING: f32 = 820.0;
 
     /// A badge, a checkbox.
     pub const RADIUS_S: f32 = 4.0;
@@ -554,15 +554,15 @@ pub mod size {
     pub const RADIUS_L: f32 = 10.0;
 
     /// Metadata, the status strip.
-    pub const TEXT_XS: f32 = 11.0;
+    pub const TEXT_XS: f32 = 12.0;
     /// Labels and second lines.
-    pub const TEXT_SM: f32 = 12.0;
+    pub const TEXT_SM: f32 = 13.0;
     /// The interface's body size.
-    pub const TEXT: f32 = 13.0;
+    pub const TEXT: f32 = 14.0;
     /// Reading text: a conversation, a document.
-    pub const TEXT_MD: f32 = 14.0;
+    pub const TEXT_MD: f32 = 15.0;
     /// A section's lead.
-    pub const TEXT_LG: f32 = 16.0;
+    pub const TEXT_LG: f32 = 17.0;
     /// A screen's title.
     pub const TEXT_XL: f32 = 20.0;
     /// The one large line on Home.

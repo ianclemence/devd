@@ -10,7 +10,14 @@ use std::fmt::Write as _;
 use std::{env, fs, path::PathBuf};
 
 fn main() {
-    let dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR")).join("ui").join("brands");
+    // The page, its script and its stylesheet are compiled in by `ui.rs`, and Cargo only rebuilds
+    // a crate when one of its own sources changed. Without these lines an edit to the interface
+    // was invisible until some Rust file happened to change too.
+    let ui = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR")).join("ui");
+    for file in ["index.html", "app.js", "style.css", "favicon.svg"] {
+        println!("cargo:rerun-if-changed={}", ui.join(file).display());
+    }
+    let dir = ui.join("brands");
     println!("cargo:rerun-if-changed={}", dir.display());
     let mut names: Vec<String> = fs::read_dir(&dir)
         .map(|entries| entries.filter_map(|e| e.ok()).filter_map(|e| e.file_name().into_string().ok()).collect())

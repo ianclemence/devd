@@ -9,6 +9,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::panic::AssertUnwindSafe;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -201,6 +202,35 @@ fn cap_text(text: &str, max: usize) -> String {
         .rev()
         .collect();
     format!("{head}\n\n… [{} characters omitted to save context. Ask for a narrower result, or read the part you need.] …\n\n{tail}", text.chars().count() - head.chars().count() - tail.chars().count())
+}
+
+/// What to tell a model about the files the newest message names.
+///
+/// A message that carries files says so in its own text, with the path of each.
+/// A picture from the uploads folder is sent as a picture when the model can see;
+/// everything else has to be opened with a tool, and a path alone is not enough
+/// for that: the model has to be told that the files are real, where they are,
+/// and that the folder they live in is one it may read.
+pub(crate) fn attachments_brief(messages: &[Value], uploads: &Path) -> String {
+    let Some(last) = messages.iter().rev().find(|m| m["role"] == "user") else {
+        return String::new();
+    };
+    let text = last["content"]
+        .as_array()
+        .map(|b| crate::attachments::text_of_blocks(b))
+        .unwrap_or_default();
+    let others = crate::attachments::other_paths(&text, uploads);
+    if others.is_empty() {
+        return String::new();
+    }
+    let list: Vec<String> = others.iter().map(|p| format!("- {p}")).collect();
+    format!(
+        "\n\n# Attached files\nThe person attached these files with their message, and they exist on this machine:\n{}\n\
+         Open one with your file tools (read_file, list_files) using the path exactly as it is written. \
+         The attachments folder ({}) and any project folder are yours to read.",
+        list.join("\n"),
+        uploads.display()
+    )
 }
 
 /// Turn the log into the messages a model should see.
@@ -1616,6 +1646,10 @@ impl Hub {
             let uploads = self.ctx.paths.root().join("uploads");
             let pictures = crate::attachments::with_images(&messages, true, &uploads);
             let has_pictures = crate::attachments::has_images(&pictures);
+            // A file that is not a picture is read with the agent's own tools, so
+            // say where any file this turn names is, and which of them a tool can
+            // open, rather than leaving a bare path an agent has to guess about.
+            let attachments = attachments_brief(&messages, &uploads);
             // When the model was asked, for the time its reply took.
             let mut asked_at = Instant::now();
             for (i, (provider, key, model, why)) in candidates.iter().enumerate() {
@@ -1651,10 +1685,11 @@ impl Hub {
                 // failing the turn.
                 let sees = caps.vision != Some(false);
                 let mut model_system = system.clone();
+                model_system.push_str(&attachments);
                 if has_pictures {
                     model_system.push_str(match caps.vision {
                         Some(true) => "\n\n# Images\nThe person attached one or more images. Their actual content is in the message; read it and use it.",
-                        Some(false) => "\n\n# Images\nThe person attached one or more images, but this model cannot see images. You only have the file path. Do not claim to have seen it; say this model is text-only and offer a vision-capable model.",
+                        Some(false) => "\n\n# Images\nThe person attached one or more images, but this model cannot see them. The files are on this machine where they were attached; do not claim to have seen them, say this model is text-only, and offer a vision-capable model.",
                         None => "\n\n# Images\nThe person attached one or more images. Their actual content is included when the provider accepts it; if the provider rejects it, continue from the text and say so.",
                     });
                 }
@@ -1740,19 +1775,29 @@ impl Hub {
                     self.ctx.store.set_thread_state(tid, "idle", None)?;
                     return Ok(());
                 }
-                if has_pictures && sees && result.as_ref().err().is_some_and(looks_like_image_rejection) {
-                    // An unknown model (or a provider whose metadata is wrong)
-                    // refused the picture. Keep the turn instead of losing it:
-                    // retry as text, tell the person, and let them pick a model
-                    // that sees. The failed attempt's partial text is replaced
-                    // by the `start` of the retry.
+                if has_pictures && sees && result.is_err() {
+                    // A picture the provider would not take failed the turn
+                    // whether it was refused for its type or lost on the way.
+                    // Keep the turn instead of losing it: retry as text, tell
+                    // the person, and let them pick a model that sees. The
+                    // failed attempt's partial text is replaced by the `start`
+                    // of the retry.
+                    let refused = result
+                        .as_ref()
+                        .err()
+                        .is_some_and(looks_like_image_rejection);
+                    let why = result.as_ref().err().map(ToString::to_string).unwrap_or_default();
                     self.log(
                         tid,
                         "notice",
-                        json!({ "text": format!("{model} could not read the attached image; retrying this turn as text. Choose a vision-capable model to let the assistant see images.") }),
+                        json!({ "text": if refused {
+                            format!("{model} could not read the attached image; retrying this turn as text. Choose a vision-capable model to let the assistant see images.")
+                        } else {
+                            format!("The attached image could not be sent ({why}); retrying this turn as text.")
+                        } }),
                     )?;
                     request.messages = messages.clone();
-                    request.system = format!("{system}\n\n# Images\nThe attached image was rejected by this provider. Continue from the text and do not claim to have seen it.");
+                    request.system = format!("{system}\n\n# Images\nThe attached image could not be sent to this provider. Continue from the text and do not claim to have seen it.");
                     pending.clear();
                     last_emit = Instant::now();
                     result = attempt(&request, &mut pending, &mut last_emit);

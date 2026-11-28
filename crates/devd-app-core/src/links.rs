@@ -76,8 +76,30 @@ pub fn find(text: &str) -> Vec<Found> {
 }
 
 /// One whitespace-separated word, with the quotes and full stops around it taken off.
+///
+/// A `devd://` address may hold a space of its own, written as `%20`: `devd://projects/D%3A%5Cmy%20work`
+/// is one place, and splitting it at the percent sign would name a folder that does not exist.
 fn word(text: &str, start: usize, end: usize) -> Option<(Range<usize>, Target)> {
     let mut s = start;
+    if text[start..end].to_ascii_lowercase().starts_with("devd://") {
+        // Brackets and full stops around the address belong to the sentence, as they do for a path.
+        while s < end && text[s..end].starts_with(OPENERS) {
+            s += text[s..].chars().next().map_or(1, char::len_utf8);
+        }
+        let mut e = end;
+        while e > s {
+            let last = text[s..e].chars().next_back()?;
+            if !CLOSERS.contains(&last) {
+                break;
+            }
+            // `)` closes an address only when its `(` opened inside it; otherwise it is the sentence's.
+            if matches!(last, ')' | ']' | '}') && balanced(&text[s..e]) {
+                break;
+            }
+            e -= last.len_utf8();
+        }
+        return crate::nav::Route::parse(&text[s..e]).map(|route| (s..e, Target::Devd(route.path())));
+    }
     let mut e = end;
     while s < e && text[s..e].starts_with(OPENERS) {
         s += text[s..].chars().next().map_or(1, char::len_utf8);
@@ -397,6 +419,20 @@ mod tests {
             places,
             ["/runs/abc123", "/projects/D%3A%5Cwww%5Cluna", "/inbox"]
         );
+    }
+
+    #[test]
+    fn a_devd_address_with_a_space_in_its_project_is_one_place() {
+        // `%20` is the space a folder name holds. The address is one word whatever it names.
+        for written in [
+            "devd://projects/D%3A%5Cmy%20work",
+            "(devd://projects/D%3A%5Cmy%20work)",
+            "devd://projects/D%3A%5Cmy%20work.",
+        ] {
+            let found = find(written);
+            assert_eq!(found.len(), 1, "{written}: {found:?}");
+            assert!(matches!(&found[0].target, Target::Devd(p) if p.contains("my%20work")), "{written}");
+        }
     }
 
     #[test]
