@@ -299,20 +299,27 @@
     render();
   }
 
-  /* Kept apart from `update`: the window's themes are chosen by the person, not the server. */
-  /* The window's chrome, from the server's rules, and where the person has just gone. */
+  /* The window's chrome, from the server's rules: its badges, its faces and its strip.
+   *
+   * It is read as the page loads and then on a slow beat, not on every screen change. It was read
+   * on each change too, and a frame answered while the page was still arriving drew "Checking the
+   * machine…" and a strip with no version, which then stood for as long as that screen was on.
+   * An answer that names no version is half-arrived, and is not kept. */
   async function sync() {
     try {
       var res = await fetch("/api/chrome", { headers: { Authorization: "Bearer " + token() } });
       if (res.ok) {
         var chrome = await res.json();
-        Shell.badges = chrome.badges || {};
-        Shell.strip = chrome.strip || Shell.strip;
-        Shell.version = chrome.version || Shell.version;
-        if (chrome.strip) Shell.health = { tone: chrome.strip.tone, headline: chrome.strip.headline };
-        Shell.working = chrome.strip ? chrome.strip.working : Shell.working;
-        Shell.waiting = chrome.strip ? chrome.strip.waiting : Shell.waiting;
-        if (chrome.faces && chrome.faces.length) Shell.faces = chrome.faces;
+        if (chrome.version) {
+          Shell.badges = chrome.badges || Shell.badges || {};
+          Shell.version = chrome.version;
+          if (chrome.strip) {
+            Shell.health = { tone: chrome.strip.tone, headline: chrome.strip.headline };
+            Shell.working = chrome.strip.working;
+            Shell.waiting = chrome.strip.waiting;
+          }
+          if (chrome.faces && chrome.faces.length) Shell.faces = chrome.faces;
+        }
       }
     } catch (e) { /* the frame keeps what it had */ }
     render();
