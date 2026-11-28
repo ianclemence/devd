@@ -401,24 +401,41 @@ pub fn pill(text: impl Into<SharedString>, tone: Tone, cx: &App) -> Div {
 pub fn kbd(keys: &str, cx: &App) -> Div {
     let t = theme(cx);
     let mut row = div().flex().flex_none().items_center().gap(px(3.0));
-    for key in keys.split_whitespace() {
-        row = row.child(
-            div()
-                .h(px(18.0))
-                .min_w(px(18.0))
-                .px(px(4.0))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(size::RADIUS_S))
-                .border_1()
-                .border_color(t.line)
-                .bg(t.hover)
-                .text_size(px(10.5))
-                .font_family(mono())
-                .text_color(t.muted)
-                .child(key_label(key)),
-        );
+    // A chord is given as `secondary-k`, in the order the keys are pressed: one box per key, joined
+    // by a "+", as a person writes it. Drawn as one box it read `ctrl+k`, a key no keyboard has.
+    let parts: Vec<&str> = keys.split_whitespace().collect();
+    for (i, part) in parts.iter().enumerate() {
+        let chord: Vec<&str> = part.split('-').collect();
+        for (j, key) in chord.iter().enumerate() {
+            if j > 0 {
+                row = row.child(
+                    div()
+                        .text_size(px(10.0))
+                        .text_color(t.faint)
+                        .child("+"),
+                );
+            }
+            row = row.child(
+                div()
+                    .h(px(18.0))
+                    .min_w(px(18.0))
+                    .px(px(4.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(size::RADIUS_S))
+                    .border_1()
+                    .border_color(t.line)
+                    .bg(t.hover)
+                    .text_size(px(10.5))
+                    .font_family(mono())
+                    .text_color(t.muted)
+                    .child(key_label(key)),
+            );
+        }
+        if i + 1 < parts.len() {
+            row = row.child(div().text_size(px(10.0)).text_color(t.faint).child("then"));
+        }
     }
     row
 }

@@ -107,14 +107,22 @@ fn main() {
             state::start(conn.clone(), cx);
             mark(&STATE_MS);
 
-            let bounds = Bounds::centered(None, size(px(1360.0), px(860.0)), cx);
+            // Open at 1360x860, but never larger than the screen it opens on: a window wider than
+            // the display ran off its right edge, with the search and the lists cut away. It also
+            // cannot be made smaller than the minimum, so that minimum is kept below the screen too.
+            let screen = cx.primary_display().map(|d| f32::from(d.bounds().size.width));
+            let width = screen.map_or(1360.0, |w| 1360.0_f32.min(w - 40.0));
+            let height = (860.0_f32).min(900.0);
+            let bounds = Bounds::centered(None, size(px(width), px(height)), cx);
+            let min_width = 880.0_f32.min(width);
+            let min_height = 560.0_f32.min(height);
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 titlebar: Some(TitlebarOptions {
                     title: Some("devd".into()),
                     ..TitlebarOptions::default()
                 }),
-                window_min_size: Some(size(px(880.0), px(560.0))),
+                window_min_size: Some(size(px(min_width), px(min_height))),
                 app_id: Some("devd".into()),
                 ..WindowOptions::default()
             };
