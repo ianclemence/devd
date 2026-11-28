@@ -603,6 +603,19 @@ fn every_navigation_button_points_at_a_page() {
 }
 
 #[test]
+fn a_half_arrived_frame_is_not_kept() {
+    // The frame is read as the page loads. An answer without its version arrived from a server
+    // that was still starting; keeping it left "Checking the machine…" and no version on the
+    // strip for as long as the screen was open.
+    let shell = include_str!("../ui/shell.js");
+    assert!(shell.contains("if (chrome.version) {"), "an answer without a version is not kept");
+    assert!(!shell.contains("Shell.strip = chrome.strip || Shell.strip"), "the old strip is not overlaid by one without a version");
+    // Asked for while the page loads and on a slow beat, not on every screen.
+    let syncs = shell.matches("sync();").count();
+    assert!(syncs <= 3, "the frame is read on a beat, not on every screen ({syncs} calls)");
+}
+
+#[test]
 fn the_page_addresses_are_the_window_addresses() {
     // A link to a screen in the page is a link the window opens: the paths it writes come from
     // the window's own route table (`Route::path`), not a set of its own. A page of an area keeps
