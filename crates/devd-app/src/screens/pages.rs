@@ -911,7 +911,16 @@ fn databases(cx: &mut Context<Shell>) -> AnyElement {
 }
 
 fn tools(cx: &mut Context<Shell>) -> AnyElement {
-    let snap = read(cx, "toolchain.list");
+    // What was read last time is drawn at once, and a fresh probe is asked for in the background:
+    // a list of forty tools must not be an empty page while every executable on the machine is
+    // asked its version again. The rows carry their own "not checked" state until the answer lands.
+    let key = QueryKey::bare("toolchain.list");
+    let snap = match devd(cx).sync.peek(&key) {
+        // Drawn now; the watch below asks for a fresh probe when the list is older than it is
+        // kept for.
+        Some(cached) if cached.data.is_some() && !cached.fetching => cached,
+        _ => devd(cx).sync.watch(&key),
+    };
     let mut rows = Vec::new();
     let tools = snap
         .data

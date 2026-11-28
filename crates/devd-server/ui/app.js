@@ -556,6 +556,10 @@
    */
   var WIDE_BRANDS = {};
 
+  /* Marks that are one white shape rather than a design in colour: `path` with no fill, or filled
+   * white. They are drawn for a dark surface, so on the chip they are inverted. */
+  var MONO_BRANDS = ["git", "gh", "flutter", "swift", "dart", "kotlin", "ansible", "jenkins", "terraform"];
+
   /* The mark as a small image. The name is the accessible label, and the
      image is decorative: the text beside it already says what it is. */
   function brandImg(name, className) {
@@ -563,7 +567,11 @@
     if (!file) return "";
     var ext = file.indexOf("together") === 0 || file === "typesense" || file === "valkey" || file === "xdebug" || file === "vscode" ? "png" : "svg";
     var wide = WIDE_BRANDS[file] ? " brand-dot-wide" : "";
-    return '<img class="' + (className || "brand-dot") + wide + '" src="/brands/' + file + "." + ext + '" alt="" loading="lazy" width="18" height="18">';
+    // A mark drawn as one white shape (the way Git inks its own) is invisible on the light chip.
+    // The window draws it in its text colour; here the artwork is inverted to black, and a mark
+    // that carries its own colours is left exactly as it is.
+    var mono = ext === "svg" && MONO_BRANDS.indexOf(file) >= 0 ? " brand-mono" : "";
+    return '<img class="' + (className || "brand-dot") + wide + mono + '" src="/brands/' + file + "." + ext + '" alt="" loading="lazy" width="18" height="18">';
   }
 
   function relativeTime(seconds) {
@@ -5654,12 +5662,14 @@ var TERM_POLL_MS = 250;
     recover: "Recover",
     reviews: "Reviews",
     memory: "Agent memory",
-    terminal: "Terminal"
+    terminal: "Terminal",
+    run: "Commands"
   };
 
   var TAB_GROUPS = [
     { id: "files", label: "Files", tabs: ["files"] },
     { id: "git", label: "Git", tabs: ["changes", "history", "branches", "tags", "remotes", "stashes", "worktrees", "recover"] },
+    { id: "run", label: "Commands", tabs: ["run"] },
     { id: "agents", label: "Agents", tabs: ["reviews", "memory"] },
     { id: "terminal", label: "Terminal", tabs: ["terminal"] }
   ];
@@ -5716,6 +5726,7 @@ var TERM_POLL_MS = 250;
       remotes: function () { return read("git.remote.list", { repo: path }); },
       stashes: function () { return read("git.stash.list", { repo: path }); },
       worktrees: function () { return read("git.worktree.list", { repo: path }); },
+      run: function () { return read("project.tasks", { path: path }); },
       reviews: function () { return read("review.list", { limit: 30 }); },
       memory: function () { return read("memory.list", { limit: 30 }); },
       recover: function () {
@@ -6573,6 +6584,39 @@ var TERM_POLL_MS = 250;
     });
   }
 
+  /* The Commands tab: what the project can run, each with the exact command devd would start.
+   *
+   * The same tasks as the window's Commands tab, from the same `project.tasks` call, so a
+   * command is described in one place. A command that cannot run here says why; a destructive
+   * one is marked before it is pressed, and still asks for an approval. */
+  function renderCommands(current) {
+    var tasks = (current.data && (current.data.tasks || current.data)) || [];
+    var q = state.filters.commands || "";
+    var shown = tasks.filter(function (t) { return keeps(q, t.id, t.title, t.command); });
+    var available = tasks.filter(function (t) { return t.available !== false; }).length;
+    var body = '<div class="ui-more">What this project can run: its package scripts, the stack\'s own commands, and anything it declares. devd runs one here, in the project folder, and records what it did.<span class="grow"></span>' + mini("Check again", "command-refresh") + "</div>" +
+      '<div class="filter-row">' + filterBox("commands", "Search commands") + "</div>";
+    if (!shown.length) return body + uiEmpty(tasks.length ? 'No command matches "' + q + '"' : "No commands found", tasks.length ? "" : "devd looks for scripts in package.json, composer.json, a Makefile and the stack's own commands.");
+    body += uiHead("Commands", available + " of " + tasks.length + " ready") + uiList(shown.map(function (t) {
+      var available = t.available !== false;
+      var long = t.long_running === true;
+      var destructive = t.risk === "destructive";
+      var state = !available ? (t.unavailable_reason || "not available here")
+        : destructive ? "destroys data" : long ? "keeps running" : "";
+      var actions = available
+        ? mini(long ? "Start" : "Run", "command-run", { task: t.id, risk: t.risk || "" }, { danger: destructive })
+        : '<span class="dim">' + esc(t.unavailable_reason || "not available here") + "</span>";
+      return uiRow({
+        dot: available ? (destructive ? "warn" : "ok") : "off",
+        title: esc(String(t.title || t.id || "").replace(/`/g, "")),
+        sub: '<span class="mono">' + esc(t.command || "") + "</span>",
+        meta: state ? esc(state) : "",
+        actions: actions,
+      });
+    }));
+    return body;
+  }
+
   function renderProject() {
     if (state.view !== "project") return;
     var st = state.project.status;
@@ -6622,6 +6666,14 @@ var TERM_POLL_MS = 250;
     else if (tab === "stashes") body = renderStashes();
     else if (tab === "worktrees") body = renderWorktrees();
     else if (tab === "recover") body = renderRecover();
+    else if (tab === "run") {
+      if (current.error) body = '<div class="notice notice-bad">' + esc(current.error) + "</div>";
+      else if (!current.data && !current.loading) {
+        // The first look at this tab asks for the commands; the answer draws below.
+        loadTab("run").then(render);
+        body = skelRows(5, "loading commands");
+      } else body = renderCommands(current);
+    }
     else if (tab === "reviews") body = renderReviewTab(true);
     else if (tab === "memory") body = renderMemoryTab(true);
     else if (tab === "terminal") {
@@ -7535,7 +7587,17 @@ var TERM_POLL_MS = 250;
     return (t && t.tool && t.tool.category) || "utility";
   }
 
+  /* The list is drawn from what was read last time and checked again behind it: a page of forty
+     tools must not be blank while every executable on the machine is asked its version. Only the
+     first visit of a session has nothing to draw. */
   function loadToolchain() {
+    if (TC.data && !TC.loading) {
+      if (state.view === "toolchain") renderToolchain();
+      read("toolchain.list")
+        .then(function (d) { TC.data = d; if (state.view === "toolchain") renderToolchain(); })
+        .catch(function () { /* the list already shown stands */ });
+      return Promise.resolve();
+    }
     TC.loading = true;
     if (state.view === "toolchain") renderToolchain();
     return read("toolchain.list")
@@ -7550,10 +7612,13 @@ var TERM_POLL_MS = 250;
       ? '<span class="ui-checking"><span class="spin" aria-hidden="true"></span>Checking…</span>'
       : '<button type="button" class="btn" data-action="refresh">Re-check</button>';
     if (!TC.data) {
-      el("main").innerHTML = page("Tools", "", "", '<div class="loading" role="status" aria-live="polite">Loading…</div><div class="loading-note">devd runs each tool it knows to see what is installed. That takes a moment.</div>');
+      // First visit only: every tool on the machine is asked its version. Afterwards the list is
+      // drawn at once and checked again behind the person's eyes.
+      el("main").innerHTML = page("Tools", "", "", '<div class="loading" role="status" aria-live="polite">Checking the tools on this machine…</div><div class="loading-note">This is the one wait: devd runs each tool it knows to see what is installed. The list is complete until something changes.</div>');
       return;
     }
-    var host = TC.data.host, tools = TC.data.tools;
+    var host = TC.data.host;
+    var tools = TC.data.tools.filter(function (t) { return !t.tool.per_project; });
     var q = state.filters.toolchain || "";
     var cats = {};
     tools.filter(function (t) { return !toolOwnedElsewhere(t) && keeps(q, t.tool.id, t.tool.name, t.tool.purpose, t.tool.category); })
@@ -15510,6 +15575,19 @@ var TERM_POLL_MS = 250;
       var p = readInput("dev-import"); DEV.importPath = p; if (!p) return toast("warn", "Say where the project is, or choose a folder");
       act("project.import", { path: p }).then(function (o) { if (o) { DEV.detect = null; DEV.ctx = null; DEV.path = p; return loadDevelop().then(renderDevelop); } });
     },
+    "command-run": function (n) {
+      var path = state.project && state.project.path;
+      var id = n.dataset.task;
+      if (!path || !id) return;
+      var destructive = n.dataset.risk === "destructive";
+      act(destructive ? "project.run_destructive" : "project.run", { path: path, task: id }).then(function (o) {
+        if (!o) return;
+        var tail = (o.data && (o.data.output_tail || o.data.tail)) || [];
+        if (tail.length) openDrawer(id, '<pre class="log-block">' + esc(tail.join("\n")) + "</pre>");
+        return loadTab("run").then(render);
+      });
+    },
+    "command-refresh": function () { loadTab("run").then(render); },
     "task-run": function (n) {
       var id = n.dataset.task, destructive = n.dataset.risk === "destructive";
       DEV.log = "running " + id + "…"; renderDevelop();

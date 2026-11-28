@@ -8,7 +8,7 @@ use std::ops::Range;
 
 use devd_app_core::markdown::{Align, Block, Inline, Item, WidgetKind, spans};
 use gpui::{
-    App, Div, ElementId, FontStyle, FontWeight, HighlightStyle, InteractiveText, MouseButton,
+    App, Div, ElementId, FontStyle, FontWeight, HighlightStyle, Hsla, InteractiveText, MouseButton,
     SharedString, StrikethroughStyle, StyledText, UnderlineStyle, canvas, div, prelude::*, px,
 };
 use serde_json::Value;
@@ -93,19 +93,37 @@ fn text(id: &str, inlines: &[Inline], cx: &App) -> impl IntoElement {
     let t = theme(cx);
     let mut content = String::new();
     let mut styles: Vec<(Range<usize>, HighlightStyle)> = Vec::new();
+    // What is drawn with a mark around it: code, links, devd chips and file names. They get
+    // rounded corners, a margin from the words either side, and a little room above and below,
+    // so a mark reads as a thing set into the sentence rather than as tinted letters.
+    let mut marks: Vec<Range<usize>> = Vec::new();
     let mut links: Vec<(Range<usize>, Link)> = Vec::new();
     let root = super::links::root(cx);
     // A file or address the agent mentioned is a link even when it was not written as one.
     let mut found: Vec<(Range<usize>, Link)> = Vec::new();
     for span in spans(inlines) {
+        if span.link.is_none() && !span.code && span.text == "\n" {
+            content.push('\n');
+            continue;
+        }
         // What a person wrote or an agent said can hold a devd:// address: it is drawn as a chip.
         let (shown, inside_links) = if span.link.is_none() && !span.code {
             super::links::present(&span.text, root.as_deref())
         } else {
             (span.text.clone(), Vec::new())
         };
-        let range = content.len()..content.len() + shown.len();
-        content.push_str(&shown);
+        // A mark stands clear of the words beside it: one space each side, which the browser draws
+        // with padding. A space just inside a line break would start the next line indented.
+        let text = if span.code || span.link.is_some() || !inside_links.is_empty() {
+            format!("\u{2009}{shown}\u{2009}")
+        } else {
+            shown
+        };
+        let trimmed_start = text.len() - text.trim_start_matches('\u{2009}').len();
+        let trimmed_end = text.len() - text.trim_end_matches('\u{2009}').len();
+        let range = content.len()..content.len() + text.len();
+        content.push_str(&text);
+        let mark = range.start + trimmed_start..range.end - trimmed_end;
         let mut style = HighlightStyle::default();
         let mut styled = false;
         if span.strong {
@@ -125,9 +143,10 @@ fn text(id: &str, inlines: &[Inline], cx: &App) -> impl IntoElement {
             styled = true;
         }
         if span.code {
-            style.background_color = Some(t.hover);
+            // The colour belongs to the mark drawn under it; the words keep the text colour.
             style.color = Some(t.text);
             styled = true;
+            marks.push(mark.clone());
         }
         if let Some(url) = span.link {
             // `[main.rs](src/main.rs:42)` is a file, not a web address: what it points at decides where it goes.
@@ -140,21 +159,26 @@ fn text(id: &str, inlines: &[Inline], cx: &App) -> impl IntoElement {
                     wavy: false,
                 });
                 links.push((range.clone(), link));
+                marks.push(mark.clone());
                 styled = true;
             }
         } else if span.code {
             // `src/main.rs` is a file; `cargo test` is not.
             if let Some(link) = super::links::resolve_token(&span.text, root.as_deref()) {
-                found.push((range.clone(), link));
+                found.push((mark.clone(), link));
             }
         } else {
             for (inside, link) in inside_links {
-                found.push((range.start + inside.start..range.start + inside.end, link));
+                found.push((mark.start + inside.start..mark.start + inside.end, link));
             }
         }
         if styled && !range.is_empty() {
             styles.push((range, style));
         }
+    }
+    for (range, link) in &found {
+        marks.push(range.clone());
+        links.push((range.clone(), link.clone()));
     }
     let link_style = HighlightStyle {
         color: Some(t.info),
@@ -175,12 +199,11 @@ fn text(id: &str, inlines: &[Inline], cx: &App) -> impl IntoElement {
         style.color = link_style.color;
         style.underline = link_style.underline;
         // A place in devd is a chip: tinted, so it reads as something to press.
+        // A place in devd is drawn as a chip: the mark under it is tinted in the drawing below.
         if matches!(link, Link::Route(_)) {
-            style.background_color = Some(tint(t.info, 0.14));
             style.underline = None;
         }
         styles.push((range.clone(), style));
-        links.push((range, link));
     }
     // Highlights must be in order and must not overlap: where a link sits inside a styled span, the link's wins.
     styles.sort_by_key(|(r, _)| (r.start, r.end));
@@ -254,12 +277,70 @@ fn text(id: &str, inlines: &[Inline], cx: &App) -> impl IntoElement {
     let layout = styled.layout().clone();
     let ranges: Vec<Range<usize>> = links.iter().map(|(range, _)| range.clone()).collect();
     let targets: Vec<Link> = links.into_iter().map(|(_, link)| link).collect();
+    // What each mark is drawn in: a place in devd a tint of its own, a file or address a quiet
+    // surface, and code its usual grey.
+    let mark_links = ranges.clone();
+    let mark_colors: Vec<(Range<usize>, Hsla)> = marks
+        .iter()
+        .map(|range| {
+            let link = mark_links
+                .iter()
+                .position(|r| r.start <= range.start && range.end <= r.end)
+                .and_then(|n| targets.get(n));
+            let color = match link {
+                Some(Link::Route(_)) => tint(t.info, 0.14),
+                Some(_) => tint(t.info, 0.08),
+                None => t.hover,
+            };
+            (range.clone(), color)
+        })
+        .collect();
+    let pad = px(size::TEXT_SM * 0.28);
+    let mark_place = layout.clone();
     // gpui's own click on text listens for the release only from the frame after the press,
     // so a quick click on a slow frame is lost. The release is handled here, against the
     // text's layout; the element inside is kept for its pointing-hand cursor over a link.
     let hit = ranges.clone();
     let pointer = InteractiveText::new(ElementId::Name(id.to_string().into()), styled)
         .on_click(ranges.clone(), |_, _, _| {});
+    // The marks go under the words, painted from the text's own layout so each one follows its
+    // words where they fall, wraps with them, and is as wide as they are.
+    let marks_layer = canvas(
+        move |_bounds, window, _cx| {
+            let line = mark_place.line_height();
+            let mut tiles = Vec::new();
+            for (range, color) in &mark_colors {
+                let (Some(first), Some(last)) = (
+                    mark_place.position_for_index(range.start),
+                    mark_place.position_for_index(range.end.saturating_sub(1)),
+                ) else {
+                    continue;
+                };
+                if !range.is_empty() {
+                    let mut el = div()
+                        .absolute()
+                        .rounded(px(size::RADIUS_S))
+                        .bg(*color)
+                        .into_any_element();
+                    el.prepaint_as_root(
+                        gpui::point(first.x - pad, first.y - px(2.0)),
+                        gpui::size(last.x + line * 0.6 + pad * 2.0 - first.x, line + px(2.0)).into(),
+                        window,
+                        _cx,
+                    );
+                    tiles.push(el);
+                }
+            }
+            tiles
+        },
+        |_bounds, mut tiles, window, cx| {
+            for tile in tiles.iter_mut() {
+                tile.paint(window, cx);
+            }
+        },
+    )
+    .absolute()
+    .size_full();
     // Start the lookups now, so an icon is on its way even if the text has not been laid out yet.
     for (_, host) in &icons {
         let _ = super::favicon::lookup(host, cx);
@@ -303,6 +384,7 @@ fn text(id: &str, inlines: &[Inline], cx: &App) -> impl IntoElement {
                 super::links::open(&targets[n], cx);
             }
         })
+        .child(marks_layer)
         .child(pointer)
         .child(icon_layer)
 }

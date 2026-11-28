@@ -416,7 +416,9 @@ fn list(shell: &mut Shell, cx: &mut Context<Shell>) -> AnyElement {
             )
         })),
     );
-    let wide = cx.global::<crate::state::Devd>().list_width + 40.0;
+    // The Runs list has a width of its own: it is a different list on a different screen from the
+    // conversations, and dragging one must not move the other.
+    let wide = cx.global::<crate::state::Devd>().runs_width + 40.0;
     let grip = ui::grip("runs.grip", crate::state::Edge::Runs, wide - 40.0, false, cx);
     div()
         .w(px(wide))

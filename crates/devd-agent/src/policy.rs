@@ -180,8 +180,17 @@ fn family(model: &str) -> Traits {
         ("vision", Some(true), Some(true), None),
         ("multimodal", Some(true), Some(true), None),
         ("omni", Some(true), Some(true), None),
+        // DeepSeek's newer chat models take pictures; its first line and the
+        // reasoner do not. Every other DeepSeek id is left open rather than
+        // declared blind: a model nobody has information about is given the
+        // chance to accept a picture, and a provider that rejects one is
+        // retried without it instead of losing the turn.
+        ("deepseek-flash", Some(true), Some(true), None),
+        ("deepseek-v", Some(true), Some(true), None),
         ("deepseek-reasoner", Some(false), Some(false), Some(true)),
-        ("deepseek", Some(true), Some(false), None),
+        ("deepseek-chat", Some(true), Some(false), None),
+        ("deepseek-r1", Some(true), Some(false), Some(true)),
+        ("deepseek", Some(true), None, None),
         ("claude", Some(true), Some(true), None),
         ("gemini", Some(true), Some(true), None),
         ("gpt-4o", Some(true), Some(true), Some(false)),
@@ -227,6 +236,16 @@ pub fn model_caps(store: &Store, provider: &Provider, model: &str) -> ModelCaps 
     let listed_reasoning = entry.as_ref().and_then(|m| m.reasoning);
     let tools = listed_tools.or(known.and_then(|k| k.tools)).or(family_tools);
     let vision = listed_vision.or(known.and_then(|k| k.vision)).or(family_vision);
+    // The open catalogue's model ids are sometimes the family's base name ("deepseek-chat"),
+    // which misses a newer, picture-capable sibling such as "deepseek-flash". Nothing may say a
+    // model cannot see when the model name itself says it can; everything else is left to the
+    // listing, which knows a particular model best.
+    let vision = match vision {
+        Some(_) => vision,
+        // Only a family that is known by its name to see fills a gap: a blind guess would take away
+        // the one chance a model has to accept a picture and be asked again without it.
+        None => family_vision.filter(|f| *f),
+    };
     let reasoning = listed_reasoning.or(known.and_then(|k| k.reasoning)).or(family_reasoning);
     let from_catalogue = listed_tools.is_some() || listed_vision.is_some() || listed_reasoning.is_some();
     let source = if from_catalogue || entry.is_some() {

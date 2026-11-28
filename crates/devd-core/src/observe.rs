@@ -105,12 +105,20 @@ impl Delta {
 pub fn take(root: &Path) -> Snapshot {
     let head = git(root, &["rev-parse", "HEAD"]).map(|s| s.trim().to_string());
     let listed = git(root, &["ls-files", "-z", "--cached", "--others", "--exclude-standard"]);
+    // Git answers for the folder it is run in. A folder that is not the top of its repository - a
+    // project inside another checkout, or a temporary folder whose parent happens to be a
+    // repository - gets nothing back when that other repository does not list it, which is not the
+    // same as it holding no files. An empty answer is walked instead, so a project with files is
+    // never reported as empty.
     let mut names: Vec<String> = match listed {
-        Some(out) => out
-            .split('\0')
-            .filter(|n| !n.is_empty())
-            .map(str::to_string)
-            .collect(),
+        Some(out) => {
+            let names: Vec<String> = out
+                .split('\0')
+                .filter(|n| !n.is_empty())
+                .map(str::to_string)
+                .collect();
+            if names.is_empty() { walk(root) } else { names }
+        }
         None => walk(root),
     };
     names.sort();

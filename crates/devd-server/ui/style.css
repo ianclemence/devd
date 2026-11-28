@@ -113,12 +113,13 @@
   --s6: 32px;
   --s7: 48px;
 
-  /* Type. */
-  --text-2xs: 11px;
-  --text-xs: 12px;
-  --text-sm: 13px;
-  --text-md: 14px;
-  --text-lg: 16px;
+  /* Type: a little larger than it was, everywhere. Every size below is one step up, and the
+   * window's own scale in theme.rs moved with it, so the two interfaces read the same size. */
+  --text-2xs: 12px;
+  --text-xs: 13px;
+  --text-sm: 14px;
+  --text-md: 15px;
+  --text-lg: 17px;
   --text-xl: 20px;
   --text-2xl: 28px;
   --text-display: 34px;
@@ -556,6 +557,10 @@ button.text-link:focus-visible { outline: 2px solid var(--color-primary); outlin
   flex: 0 0 auto;
   align-self: flex-start;
 }
+/* Marks drawn as one colour are white artwork, the way each vendor inks it; on the light chip
+ * above they vanished. White artwork is inverted to black, as the window draws a single-colour
+ * mark in its own text colour; a photograph or a full-colour mark is left exactly as it is. */
+.brand-dot.brand-mono { filter: invert(1); }
 .brand-dot-lead { width: var(--icon-lg); height: var(--icon-lg); padding: 2px; vertical-align: -4px; }
 
 /* A wordmark keeps its own proportions and is given room to be read. */
@@ -6586,7 +6591,42 @@ body { letter-spacing: 0; }
 
 /* An agent's turn: who, then what they said and did, in one column. */
 .workspace-chat .turn, .run-feed .turn { display: block; max-width: var(--chat-col); margin: 0 auto; }
+/* Who is speaking stands beside what they said, not above it.
+ *
+ * The name used to be a row of its own, so the commands a turn ran appeared under the avatar's
+ * line while the words came below it, and the steps read as if they belonged to nobody. Now the
+ * heading is the first column of a two-column grid and the turn's body is the second, so every
+ * step and every word of one agent's turn starts after its avatar, in the column it opens. */
+.workspace-chat .turn, .run-feed .turn {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  column-gap: 4px;
+  align-items: start;
+}
 .turn-who { display: flex; align-items: center; gap: 8px; height: 24px; margin-bottom: 8px; font-size: var(--text-sm); }
+.workspace-chat .turn > .turn-who, .run-feed .turn > .turn-who {
+  grid-column: 1;
+  grid-row: 1;
+  height: 24px;
+  margin: 0;
+  padding-top: 3px;
+}
+.workspace-chat .turn > .turn-body, .run-feed .turn > .turn-body {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+  padding-left: 0;
+}
+/* The name is under the face of a room's turn, and a turn with no name shows its steps first. */
+.workspace-chat .turn > .turn-who .dim, .run-feed .turn > .turn-who .dim { display: none; }
+.workspace-chat .turn > .turn-who b, .run-feed .turn > .turn-who b {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
 .turn-who b { color: var(--color-base-content); font-weight: 600; }
 .turn-who .dim { color: var(--fg-dim); font-size: var(--text-xs); }
 .workspace-chat .turn .avatar { display: none; }
@@ -6602,8 +6642,9 @@ body { letter-spacing: 0; }
 .workspace-chat .md li + li, .run-feed .md li + li { margin-top: 3px; }
 .workspace-chat .md .md-h, .run-feed .md .md-h { margin: 18px 0 8px; font-size: var(--text-md); font-weight: 650; }
 .workspace-chat .md code:not(pre code), .run-feed .md code:not(pre code), .run-col .md code:not(pre code) {
-  padding: 1px 5px; border-radius: 5px; background: var(--color-base-300); color: #d7d7de;
+  padding: 0.14em 0.44em; margin: 0 0.12em; border-radius: 6px; background: var(--color-base-300); color: #d7d7de;
   font-family: var(--mono); font-size: 0.86em;
+  box-decoration-break: clone; -webkit-box-decoration-break: clone;
 }
 .workspace-chat .md pre, .run-feed .md pre {
   margin: 4px 0 12px; padding: 12px 14px; border-radius: var(--radius-lg);
@@ -8053,16 +8094,33 @@ body {
 }
 
 /* Markdown: one rich-content scale. */
-.workspace-chat .md, .run-feed .md, .run-col .md { font-size: 14.5px; line-height: 1.7; }
+.workspace-chat .md, .run-feed .md, .run-col .md { font-size: 15.5px; line-height: 1.7; }
 .workspace-chat .md > p, .run-feed .md > p { margin: 0 0 12px; }
-.workspace-chat .md .md-h, .run-feed .md .md-h { margin: 22px 0 8px; font-size: 15px; font-weight: 600; letter-spacing: -0.005em; }
+.workspace-chat .md .md-h, .run-feed .md .md-h { margin: 22px 0 8px; font-size: 16px; font-weight: 600; letter-spacing: -0.005em; }
 .workspace-chat .md ul, .workspace-chat .md ol, .run-feed .md ul, .run-feed .md ol { padding-left: 24px; margin: 0 0 12px; }
 .workspace-chat .md blockquote, .run-feed .md blockquote {
   margin: 14px 0; padding: 4px 0 4px 14px; border-left: 2px solid var(--accent-line); color: var(--fg-mute);
 }
 .workspace-chat .md a, .run-feed .md a { color: var(--accent-text); text-decoration-color: color-mix(in srgb, var(--accent-text) 40%, transparent); text-underline-offset: 2px; }
+/* A marked word stands in the sentence rather than on it: rounded, with room around it and a
+ * little air above and below, so code, links and chips read as things set into the prose. */
 .workspace-chat .md code:not(pre code), .run-feed .md code:not(pre code) {
   background: var(--bg-raised); border: 1px solid var(--line); color: #d9dce2;
+  padding: 0.14em 0.44em; margin: 0 0.12em; border-radius: 6px;
+  box-decoration-break: clone; -webkit-box-decoration-break: clone;
+}
+.workspace-chat .md a, .run-feed .md a {
+  padding: 0.1em 0.34em; margin: 0 0.08em; border-radius: 6px;
+  background: color-mix(in srgb, var(--accent-text) 9%, transparent);
+  text-decoration: none; box-decoration-break: clone; -webkit-box-decoration-break: clone;
+}
+.workspace-chat .md a:hover, .run-feed .md a:hover {
+  background: color-mix(in srgb, var(--accent-text) 16%, transparent);
+}
+.workspace-chat .md a.code-chip, .run-feed .md a.code-chip { font-family: var(--mono); font-size: 0.88em; }
+.workspace-chat .md mark, .run-feed .md mark {
+  padding: 0.1em 0.36em; margin: 0 0.06em; border-radius: 6px;
+  background: color-mix(in srgb, var(--color-warning) 22%, transparent); color: inherit;
 }
 .workspace-chat .md pre, .run-feed .md pre { background: var(--bg-deep); border-color: var(--line); }
 .workspace-chat .md table, .run-feed .md table { border: 1px solid var(--line); border-radius: var(--radius-field); }

@@ -1929,6 +1929,23 @@ impl Render for Shell {
                 _ => {}
             }
             if let Some(route) = Route::parse(&wanted) {
+                // A place that names a project is a place that exists: the project's page reads the
+                // folder itself, so a folder devd has not imported (this one, when the window is run
+                // from the source) opens instead of being a link to a page that can only say it is
+                // missing. The list is read first so its row is there when the page asks for it.
+                if let Route::Projects(Some(dir)) | Route::Project(dir, _) = &route {
+                    let list = devd(cx).sync.watch(&crate::state::q::projects());
+                    let known = list.list("").iter().any(|p| {
+                        p["path"].as_str().is_some_and(|p| {
+                            p.replace('\\', "/").eq_ignore_ascii_case(&dir.replace('\\', "/"))
+                        })
+                    });
+                    if !known && std::path::Path::new(dir).is_dir() {
+                        devd(cx).sync.mutate(
+                            Mutation::new("project.import", json!({ "path": dir })).invalidating("project"),
+                        );
+                    }
+                }
                 self.history.go(route);
             }
             self.present(cx);
@@ -2093,10 +2110,16 @@ impl Shell {
         let moved = x - from;
         let state = cx.global_mut::<Devd>();
         match edge {
-            Edge::List | Edge::Runs => state.list_width = (start + moved).clamp(200.0, (view * 0.5).max(240.0)),
+            // Each list keeps its own width: the runs list and the conversations list are two
+            // different screens, and widening one is not a request to widen the other.
+            Edge::List => state.list_width = (start + moved).clamp(200.0, (view * 0.5).max(240.0)),
+            Edge::Runs => state.runs_width = (start + moved).clamp(200.0, (view * 0.5).max(240.0)),
             Edge::Pane => {
-                let most = (view - state.list_width - screens::pane::STRIP - screens::pane::CONVERSATION_MIN)
-                    .max(screens::pane::NARROWEST);
+                // The most the pane may take is what is left once the list keeps its width and the
+                // conversation keeps its minimum. A window too narrow for both leaves the pane at
+                // its own smallest, which is still a usable column.
+                let room = view - state.list_width - screens::pane::STRIP - screens::pane::CONVERSATION_MIN;
+                let most = room.max(screens::pane::NARROWEST);
                 state.pane_width = Some((start - moved).clamp(screens::pane::NARROWEST, most));
             }
         }

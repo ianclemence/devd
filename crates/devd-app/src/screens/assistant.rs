@@ -448,9 +448,16 @@ pub fn render(
     use super::pane::{CONVERSATION_MIN, NARROWEST, STRIP};
     // The strip first: it opens the pane when the assistant has just started the browser.
     let strip = super::pane::strip(shell, cx);
-    let current = thread.clone();
-    let main = match thread {
-        Some(id) => conversation(shell, &id, cx),
+    // A conversation that is gone is gone: deleted from this window, from another, or by an agent. The
+    // page behind it went on showing its last transcript, so a deleted conversation stayed on screen
+    // while its row had already left the list. It goes back to the start instead, as New does.
+    let asked = thread.is_some();
+    let current = thread.filter(|id| exists(id, cx));
+    if current.is_none() && asked {
+        shell.history.select(Route::Assistant(None));
+    }
+    let main = match &current {
+        Some(id) => conversation(shell, id, cx),
         None => start(shell, cx),
     };
     // A browser that has taken the window is the thing being looked at: the conversation and the
@@ -477,6 +484,26 @@ pub fn render(
         .child(strip)
         .bg(ui::ground(cx));
     row.into_any_element()
+}
+
+/// Whether a conversation is still among the ones devd has.
+///
+/// The list is what the window already keeps true: a conversation leaves it the moment it is
+/// deleted, here or anywhere else. A list nobody has read yet says nothing either way, so the
+/// conversation is allowed to draw until the first list arrives. A conversation that is in the
+/// list is taken as present: whether it is a team member's (made by its run rather than typed)
+/// is that page's own business.
+fn exists(id: &str, cx: &Context<Shell>) -> bool {
+    // The list is read without asking for it, so merely drawing a conversation does not make the
+    // window wait on a fetch; arriving at the Assistant has already asked for it.
+    let Some(threads) = devd(cx).sync.peek(&q::threads()) else {
+        return true;
+    };
+    // Nothing read yet, or a list that failed to load: not evidence of anything.
+    if threads.data.is_none() || threads.error.is_some() {
+        return true;
+    }
+    threads.list("").iter().any(|t| t["id"].as_str() == Some(id))
 }
 
 fn sidebar(current: Option<&str>, cx: &mut Context<Shell>) -> AnyElement {

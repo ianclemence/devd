@@ -35,14 +35,41 @@ pub fn image_type(bytes: &[u8]) -> Option<&'static str> {
     }
 }
 
-/// The paths a message names after "Attached files:".
+/// The markers a message puts before its list of files. The browser client writes
+/// "Attached files:"; the window's composer wrote "Attached (read them from disk):",
+/// which nothing read, so a picture attached from the window never reached the
+/// model even when it could see.
+const MARKERS: [&str; 2] = ["Attached files:\n", "Attached (read them from disk):\n"];
+
+/// The paths a message names after one of the attachment markers.
 pub fn attached_paths(text: &str) -> Vec<String> {
-    let Some(at) = text.find("Attached files:\n") else { return Vec::new() };
-    text[at + "Attached files:\n".len()..]
+    let Some((at, marker)) = MARKERS
+        .iter()
+        .filter_map(|m| text.rfind(m).map(|at| (at, *m)))
+        .max_by_key(|(at, _)| *at)
+    else {
+        return Vec::new();
+    };
+    text[at + marker.len()..]
         .lines()
         .take_while(|l| l.starts_with("- "))
         .map(|l| l[2..].trim().to_string())
         .filter(|l| !l.is_empty())
+        .collect()
+}
+
+/// The files a picture cannot stand for: everything but a picture the folder of uploads holds.
+pub fn other_paths(text: &str, uploads: &Path) -> Vec<String> {
+    let root = uploads.canonicalize().unwrap_or_else(|_| uploads.to_path_buf());
+    attached_paths(text)
+        .into_iter()
+        .filter(|p| {
+            let path = Path::new(p);
+            let pictured = path.is_file()
+                && std::fs::read(path).ok().and_then(|b| image_type(&b)).is_some()
+                && path.canonicalize().is_ok_and(|real| real.starts_with(&root));
+            !pictured
+        })
         .collect()
 }
 
@@ -75,17 +102,21 @@ pub fn with_images(messages: &[Value], vision: bool, uploads: &Path) -> Vec<Valu
         if room == 0 {
             break;
         }
+        // A picture belongs to the message that names it, so only a message
+        // that has words of its own is reopened: a tool result is not where a
+        // person put a picture.
         if m["role"] != "user" {
             continue;
         }
         let Some(blocks) = m["content"].as_array() else { continue };
-        let text = blocks.iter().filter(|b| b["type"] == "text").filter_map(|b| b["text"].as_str()).collect::<Vec<_>>().join("\n");
+        let text = text_of_blocks(blocks);
+        let paths = attached_paths(&text);
         let mut images: Vec<Value> = Vec::new();
-        for p in attached_paths(&text) {
+        for p in &paths {
             if room == 0 {
                 break;
             }
-            if let Some(block) = read_image(&root, Path::new(&p)) {
+            if let Some(block) = read_image(&root, Path::new(p)) {
                 images.push(block);
                 room -= 1;
             }
@@ -96,6 +127,24 @@ pub fn with_images(messages: &[Value], vision: bool, uploads: &Path) -> Vec<Valu
         }
     }
     out
+}
+
+/// A user message's words, whether they sit in one text block or in several.
+pub fn text_of_blocks(blocks: &[Value]) -> String {
+    blocks
+        .iter()
+        .filter(|b| b["type"] == "text")
+        .filter_map(|b| b["text"].as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Whether a message names a file that is not a picture the uploads folder holds:
+/// one an agent can only open with a tool of its own.
+pub fn names_other_file(message: &Value, uploads: &Path) -> bool {
+    message["content"]
+        .as_array()
+        .is_some_and(|blocks| !other_paths(&text_of_blocks(blocks), uploads).is_empty())
 }
 
 /// Whether a prepared message list carries actual image blocks.
@@ -194,5 +243,34 @@ mod tests {
         let out = with_images(&msgs, true, &d);
         let with: Vec<bool> = out.iter().map(|m| m["content"][0]["type"] == "image").collect();
         assert_eq!(with, vec![false, false, true, true, true]);
+    }
+
+    #[test]
+    fn the_window_composers_marker_is_read_too() {
+        // The window wrote its list under its own words, and no reader knew them,
+        // so a picture attached in the window reached the model as a bare path.
+        let d = dir("window");
+        let p = d.join("shot.png");
+        std::fs::write(&p, PNG).unwrap();
+        let m = json!({ "role": "user", "content": [{ "type": "text", "text": format!("what is this?\n\nAttached (read them from disk):\n- {}", p.display()) }] });
+        let out = with_images(std::slice::from_ref(&m), true, &d);
+        assert_eq!(out[0]["content"][0]["type"], "image");
+        assert!(has_images(&out));
+        // A tool result between the person and now does not take the picture away.
+        let tool = json!({ "role": "user", "content": [{ "type": "tool_result", "tool_use_id": "t1", "content": "42 lines" }] });
+        let out = with_images(&[m, tool], true, &d);
+        assert!(has_images(&out), "the picture stays on the message that named it");
+    }
+
+    #[test]
+    fn a_file_that_is_not_a_picture_is_left_for_a_tool_to_read() {
+        let d = dir("other");
+        let p = d.join("notes.txt");
+        std::fs::write(&p, b"hello").unwrap();
+        assert!(names_other_file(&message(&[&p]), &d));
+        let picture = d.join("a.png");
+        std::fs::write(&picture, PNG).unwrap();
+        assert!(!names_other_file(&message(&[&picture]), &d), "a picture is sent, not read");
+        assert!(other_paths("nothing attached", &d).is_empty());
     }
 }
