@@ -10,6 +10,31 @@ may change capability identifiers where the design was wrong.
 
 ---
 
+## [0.45.2] - 2026-11-28 - One set of addresses
+
+### Fixed
+
+- **The web app's addresses are the window's.** A link copied from a web screen used to open
+  nothing in the window: the page wrote `/agents/runs`, `/agents/team`, `/models`, `/server/tools`
+  and `/api-tools`. The paths are now the window's own (`/runs`, `/team`, `/intelligence`, `/tools`,
+  `/schedules`, `/capabilities`, a page under its id), with a test that every path round-trips
+  through the window's parser. Old addresses are rewritten to the new ones. The Server area gains
+  the window's Services, Operations and Preview pages, so every tab the window draws opens.
+- **The screen fills the window again.** On every screen with a side list, the list sat off the
+  left edge and the screen was squeezed to 288 px: the panel's built-in absolute positioning and
+  its backdrop took grid columns. The screen now gets the rest (616 px of 760 against 288 before).
+- **The rail and an area's tabs work.** Their presses fell through; the frame hands them to the
+  page, which changes screens without reloading the document (about 50 ms from press to content).
+- **A screen no longer waits on its slowest read.** Services, sites and runtimes are drawn as soon
+  as they arrive and the certificate facts, hosts file and catalogue fill in behind them; a read
+  that never answers cannot leave "Checking…" for more than six seconds.
+- **The sidebar was short and search read `ctrl+k`.** The search now reads Ctrl + K in the
+  window's key chips.
+- **The daemon replaces a stale record it may not delete.** Where a folder grants writing without
+  deleting, a record left by a crashing devd stopped devd starting with "Access is denied"; it is
+  written where it stands instead, with a test for it.
+
+---
 ## [0.45.1] - 2026-11-28 - The window fits its screen
 
 ### Fixed
