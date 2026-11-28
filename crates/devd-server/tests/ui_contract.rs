@@ -608,11 +608,16 @@ fn a_half_arrived_frame_is_not_kept() {
     // that was still starting; keeping it left "Checking the machine…" and no version on the
     // strip for as long as the screen was open.
     let shell = include_str!("../ui/shell.js");
-    assert!(shell.contains("if (chrome.version) {"), "an answer without a version is not kept");
+    assert!(
+        shell.contains(r#"if (chrome.version && !(first && chrome.strip && chrome.strip.tone === "neutral")) {"#),
+        "an answer without a version, or a first answer still checking, is not kept"
+    );
+    assert!(shell.contains("sync(true);"), "the page asks for a fresh answer on load");
     assert!(!shell.contains("Shell.strip = chrome.strip || Shell.strip"), "the old strip is not overlaid by one without a version");
     // Asked for while the page loads and on a slow beat, not on every screen.
-    let syncs = shell.matches("sync();").count();
-    assert!(syncs <= 3, "the frame is read on a beat, not on every screen ({syncs} calls)");
+    let syncs = shell.matches("sync(true);").count();
+    assert!((1..=3).contains(&syncs), "the page asks for it on load ({syncs} calls)");
+    assert!(shell.contains("setInterval(sync, 15000)"), "and again on a slow beat");
 }
 
 #[test]
